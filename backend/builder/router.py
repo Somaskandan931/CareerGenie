@@ -31,7 +31,7 @@ def generate_latex_resume(data: ResumeForm):
     pdf_file = RESUME_DIR / f"{base_name}.pdf"
 
     try:
-        template = env.get_template("resume_template.tex")
+        template = env.get_template("resume_template.tex")  # ✅ simplified path for portability
         rendered_tex = template.render(**data.dict())
         tex_file.write_text(rendered_tex, encoding="utf-8")
 
@@ -52,7 +52,6 @@ def generate_latex_resume(data: ResumeForm):
         return JSONResponse(status_code=500, content={"error": "LaTeX compilation failed"})
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
-
 
 @router.get("/download/{file_name}")
 def download_resume(file_name: str):
