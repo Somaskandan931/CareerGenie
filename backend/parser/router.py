@@ -1,57 +1,45 @@
-from fastapi import APIRouter, UploadFile, File
-from fastapi.responses import JSONResponse
-import os
-import tempfile
-import docx2txt
-import pdfplumber
+from fastapi import APIRouter, UploadFile, File, HTTPException
+import logging
 
 router = APIRouter()
+logger = logging.getLogger( __name__ )
 
-def extract_text_from_pdf(file_path: str) -> str:
-    """Extract text from a PDF using pdfplumber."""
-    text = ""
-    with pdfplumber.open(file_path) as pdf:
-        for page in pdf.pages:
-            text += page.extract_text() or ""
-    return text
 
-def extract_text_from_docx(file_path: str) -> str:
-    """Extract text from a DOCX using docx2txt."""
-    return docx2txt.process(file_path)
+@router.post( "/parse" )  # This creates the endpoint /upload-resume/parse
+async def parse_resume ( file: UploadFile = File( ... ) ) :
+    try :
+        # Validate file type
+        allowed_types = [
+            "application/pdf",
+            "application/msword",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ]
 
-@router.post("/upload-resume")
-async def upload_resume(file: UploadFile = File(...)):
-    try:
-        # Validate extension
-        _, ext = os.path.splitext(file.filename)
-        ext = ext.lower()
+        if file.content_type not in allowed_types :
+            raise HTTPException( status_code=400, detail="Invalid file type" )
 
-        if ext not in [".pdf", ".docx"]:
-            return JSONResponse(status_code=400, content={"error": "Only .pdf and .docx files are supported."})
-
-        # Save uploaded file to a temp file
-        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-            contents = await file.read()
-            tmp.write(contents)
-            tmp_path = tmp.name
-
-        # Extract text
-        if ext == ".pdf":
-            extracted_text = extract_text_from_pdf(tmp_path)
-        else:
-            extracted_text = extract_text_from_docx(tmp_path)
-
-        # Clean up temp file
-        os.remove(tmp_path)
-
-        # Truncate for preview (optional)
-        preview_text = extracted_text.strip()[:3000]
-
-        return {
-            "filename": file.filename,
-            "text_preview": preview_text,
-            "char_count": len(extracted_text),
+        # Mock parsing logic - replace with actual parsing
+        mock_parsed_data = {
+            "personal_info" : {
+                "name" : "John Doe",
+                "email" : "john.doe@example.com",
+                "phone" : "+1-555-0123",
+                "address" : "San Francisco, CA"
+            },
+            "education" : [],
+            "experience" : [],
+            "skills" : ["Python", "JavaScript", "SQL", "React"],
+            "projects" : []
         }
 
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"error": f"Resume parsing failed: {str(e)}"})
+        resume_text = f"{mock_parsed_data['personal_info']['name']} {' '.join( mock_parsed_data['skills'] )}"
+
+        return {
+            "parsed_data" : mock_parsed_data,
+            "resume_text" : resume_text,
+            "filename" : file.filename
+        }
+
+    except Exception as e :
+        logger.error( f"Resume parsing error: {str( e )}" )
+        raise HTTPException( status_code=500, detail="Resume parsing failed" )

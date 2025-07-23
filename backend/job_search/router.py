@@ -1,43 +1,36 @@
 from fastapi import APIRouter, Query
-from fastapi.responses import JSONResponse
-from dotenv import load_dotenv
-import requests
-import os
+from typing import Optional, List
+import logging
 
 router = APIRouter()
+logger = logging.getLogger( __name__ )
 
-# ✅ Load .env variables
-load_dotenv()
-SERPAPI_KEY = os.getenv("SERPAPI_KEY")
 
-@router.get("/search-jobs")
-def search_jobs(query: str = Query(...), location: str = Query("India")):
-    try:
-        url = "https://serpapi.com/search"
-        params = {
-            "engine": "google_jobs",
-            "q": f"{query} jobs in {location}",
-            "api_key": SERPAPI_KEY
-        }
-
-        response = requests.get(url, params=params)
-
-        if response.status_code != 200:
-            return JSONResponse(status_code=response.status_code, content={"error": "Failed to fetch jobs"})
-
-        jobs_data = response.json().get("jobs_results", [])[:10]
-        results = [
+@router.get( "/search" )  # This creates the endpoint /search-jobs/search
+async def search_jobs (
+        query: str = Query( ..., description="Job search query" ),
+        location: Optional[str] = Query( None, description="Job location" ),
+        salary_min: Optional[int] = Query( None, description="Minimum salary" ),
+        salary_max: Optional[int] = Query( None, description="Maximum salary" )
+) :
+    try :
+        # Your job search logic here
+        # For now, return mock data
+        mock_jobs = [
             {
-                "title": job.get("title"),
-                "company": job.get("company_name"),
-                "location": job.get("location"),
-                "description": job.get("description"),
-                "url": job.get("via")  # this is typically "Google", etc.
+                "id" : 1,
+                "title" : f"Senior {query} Engineer",
+                "company" : "TechCorp Inc.",
+                "location" : location or "San Francisco, CA",
+                "salary" : f"${salary_min or 120000} - ${salary_max or 160000}",
+                "type" : "Full-time",
+                "description" : f"We're looking for a senior {query} engineer with expertise in modern technologies.",
+                "requirements" : ["Python", "SQL", "AWS", "Docker", "5+ years experience"]
             }
-            for job in jobs_data
         ]
 
-        return {"results": results}
+        return {"jobs" : mock_jobs, "total" : len( mock_jobs )}
 
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+    except Exception as e :
+        logger.error( f"Job search error: {str( e )}" )
+        raise HTTPException( status_code=500, detail="Job search failed" )
