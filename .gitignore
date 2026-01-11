@@ -1,0 +1,106 @@
+node_modules
+# =========================
+# General
+# =========================
+.DS_Store
+Thumbs.db
+*.log
+
+# =========================
+# Environment Variables
+# =========================
+.env
+.env.*
+!.env.example
+
+# =========================
+# Node / React
+# =========================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+build/
+dist/
+
+# =========================
+# Python / FastAPI
+# =========================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+.venv/
+venv/
+ENV/
+env/
+
+# =========================
+# Jupyter / Experiments
+# =========================
+.ipynb_checkpoints/
+
+# =========================
+# Vector Databases / RAG Artifacts
+# =========================
+chroma/
+chromadb/
+faiss_index/
+vectorstore/
+*.index
+*.bin
+
+# =========================
+# Model & Cache Files
+# =========================
+models/
+cache/
+*.pkl
+*.joblib
+
+# =========================
+# Uploaded Files
+# =========================
+uploads/
+tmp/
+temp/
+
+# =========================
+# API Keys / Credentials
+# =========================
+*.pem
+*.key
+*.crt
+secrets.json
+
+# =========================
+# IDE / Editor
+# =========================
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# =========================
+# OS / Tooling
+# =========================
+coverage/
+htmlcov/
+.mypy_cache/
+.pytest_cache/
+
+# =========================
+# Docker (optional)
+# =========================
+docker-compose.override.yml
+
+# =========================
+# Misc
+# =========================
+*.zip
+*.tar.gz
+*.bak

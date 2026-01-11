@@ -1,0 +1,23 @@
+# Existing dependencies
+fastapi
+uvicorn
+python-multipart
+pydantic
+python-dotenv
+requests
+pdfminer.six
+python-docx
+jinja2
+
+# NEW RAG Dependencies
+sentence-transformers  # For embeddings
+chromadb              # Vector database
+langchain             # RAG orchestration
+openai                # LLM API (or anthropic)
+anthropic            # Alternative LLM
+numpy
+pandas
+
+# Remove these (no longer needed)
+# scikit-learn  
+# rake-nltk
