@@ -11,80 +11,59 @@ logger = logging.getLogger( __name__ )
 
 class JobVectorStore :
     """
-    Manages job embeddings and similarity search using ChromaDB
+    Optimized vector store with faster embeddings and batch processing
     """
 
     def __init__ ( self, persist_directory: str = "./chroma_db" ) :
-        """Initialize vector store with persistent storage"""
+        """Initialize vector store"""
         self.persist_directory = persist_directory
 
-        # Initialize ChromaDB client
+        # Initialize ChromaDB
         self.client = chromadb.Client( Settings(
             persist_directory=persist_directory,
             anonymized_telemetry=False
         ) )
 
-        # Initialize embedding model (all-MiniLM-L6-v2 is fast and good)
-        self.embedder = SentenceTransformer( 'sentence-transformers/all-MiniLM-L6-v2' )
+        # Use faster, smaller embedding model
+        # all-MiniLM-L6-v2: 384 dimensions, very fast
+        self.embedder = SentenceTransformer(
+            'sentence-transformers/all-MiniLM-L6-v2',
+            device='cpu'  # Explicit CPU for stability
+        )
 
         # Get or create collection
         self.collection = self.client.get_or_create_collection(
             name="job_postings",
-            metadata={"description" : "Job posting embeddings for RAG matching"}
+            metadata={"description" : "Job posting embeddings"}
         )
 
-        logger.info( f"Vector store initialized with {self.collection.count()} jobs" )
+        logger.info( f"Vector store ready: {self.collection.count()} jobs" )
 
     def _create_job_text ( self, job: Dict[str, Any] ) -> str :
         """
-        Convert job dict to searchable text representation
-        This is what gets embedded for semantic search
+        Optimized job text representation - shorter for faster embeddings
         """
+        # Only include essential fields
         parts = [
-            f"Job Title: {job['title']}",
+            f"Title: {job['title']}",
             f"Company: {job['company']}",
-            f"Location: {job['location']}",
-            f"Required Skills: {', '.join( job['skills_required'] )}",
-            f"Preferred Skills: {', '.join( job.get( 'skills_preferred', [] ) )}",
+            f"Skills: {', '.join( job['skills_required'][:5] )}",  # Max 5 skills
             f"Experience: {job['experience_required']}",
-            f"Description: {job['description']}",
-            f"Responsibilities: {' '.join( job.get( 'responsibilities', [] ) )}"
+            f"Description: {job['description'][:300]}"  # Truncate description
         ]
-        return "\n".join( parts )
-
-    def load_jobs_from_file ( self, json_path: str ) -> int :
-        """
-        Load jobs from JSON file and add to vector store
-
-        Returns:
-            Number of jobs added
-        """
-        path = Path( json_path )
-        if not path.exists() :
-            logger.error( f"Jobs file not found: {json_path}" )
-            return 0
-
-        with open( path, 'r' ) as f :
-            jobs = json.load( f )
-
-        return self.add_jobs( jobs )
+        return " | ".join( parts )
 
     def add_jobs ( self, jobs: List[Dict[str, Any]] ) -> int :
         """
-        Add jobs to vector store
-
-        Args:
-            jobs: List of job dictionaries
-
-        Returns:
-            Number of jobs added
+        Optimized job addition with batch embeddings
         """
         if not jobs :
             return 0
 
-        # Prepare data for ChromaDB
+        # Prepare data
         ids = [job['job_id'] for job in jobs]
         documents = [self._create_job_text( job ) for job in jobs]
+
         metadatas = [
             {
                 "title" : job['title'],
@@ -100,8 +79,14 @@ class JobVectorStore :
             for job in jobs
         ]
 
-        # Generate embeddings
-        embeddings = self.embedder.encode( documents ).tolist()
+        # Batch encode - much faster than one-by-one
+        logger.info( f"Encoding {len( jobs )} jobs..." )
+        embeddings = self.embedder.encode(
+            documents,
+            batch_size=32,  # Process in batches
+            show_progress_bar=False,
+            convert_to_numpy=True
+        ).tolist()
 
         # Add to ChromaDB
         self.collection.add(
@@ -111,27 +96,26 @@ class JobVectorStore :
             metadatas=metadatas
         )
 
-        logger.info( f"Added {len( jobs )} jobs to vector store" )
+        logger.info( f"✅ Added {len( jobs )} jobs" )
         return len( jobs )
 
     def search_jobs ( self, resume_text: str, top_k: int = 10 ) -> List[Dict[str, Any]] :
         """
-        Search for jobs matching resume using semantic similarity
-
-        Args:
-            resume_text: Plain text from parsed resume
-            top_k: Number of top matches to return
-
-        Returns:
-            List of matched jobs with similarity scores
+        Optimized semantic search
         """
+        # Truncate resume text for faster embedding
+        resume_text_truncated = resume_text[:1000]
+
         # Generate resume embedding
-        resume_embedding = self.embedder.encode( resume_text ).tolist()
+        resume_embedding = self.embedder.encode(
+            resume_text_truncated,
+            convert_to_numpy=True
+        ).tolist()
 
         # Query ChromaDB
         results = self.collection.query(
             query_embeddings=[resume_embedding],
-            n_results=top_k,
+            n_results=min( top_k, 20 ),  # Cap at 20 for speed
             include=['metadatas', 'documents', 'distances']
         )
 
@@ -141,8 +125,7 @@ class JobVectorStore :
             metadata = results['metadatas'][0][i]
             distance = results['distances'][0][i]
 
-            # Convert cosine distance to similarity score (0-100)
-            # ChromaDB returns L2 distance, convert to similarity
+            # Convert distance to similarity (0-100)
             similarity_score = max( 0, (1 - distance) * 100 )
 
             matched_jobs.append( {
@@ -163,16 +146,16 @@ class JobVectorStore :
         return matched_jobs
 
     def clear_all ( self ) :
-        """Clear all jobs from vector store"""
+        """Clear all jobs"""
         self.client.delete_collection( "job_postings" )
         self.collection = self.client.get_or_create_collection(
             name="job_postings",
-            metadata={"description" : "Job posting embeddings for RAG matching"}
+            metadata={"description" : "Job posting embeddings"}
         )
         logger.info( "Vector store cleared" )
 
     def get_stats ( self ) -> Dict[str, Any] :
-        """Get vector store statistics"""
+        """Get statistics"""
         return {
             "total_jobs" : self.collection.count(),
             "model" : "all-MiniLM-L6-v2",

@@ -92,7 +92,7 @@ app.add_middleware(
 )
 
 # Include routers
-app.include_router(builder_router, prefix="/build-resume", tags=["Resume Builder"])
+
 app.include_router(parser_router, prefix="/upload-resume/parse", tags=["Resume Parser"])
 app.include_router(job_router, prefix="/search-jobs", tags=["Job Search"])
 app.include_router(rag_router, prefix="/rag", tags=["RAG Matching"])

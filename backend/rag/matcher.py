@@ -1,253 +1,178 @@
 from typing import List, Dict, Any
-import anthropic
 import os
-import json
 import logging
+import anthropic
 from dotenv import load_dotenv
 
 load_dotenv()
-logger = logging.getLogger( __name__ )
+logger = logging.getLogger(__name__)
 
 
-class RAGJobMatcher :
+class RAGJobMatcher:
     """
-    RAG-based job matcher using retrieved jobs and LLM reasoning
+    Resume ↔ Job matcher
+    - Skill overlap
+    - Semantic similarity
+    - Optional LLM explanation
     """
 
-    def __init__ ( self ) :
-        self.api_key = os.getenv( "ANTHROPIC_API_KEY" )
-        if not self.api_key :
-            logger.warning( "ANTHROPIC_API_KEY not set - using fallback scoring" )
-        self.client = anthropic.Anthropic( api_key=self.api_key ) if self.api_key else None
+    def __init__(self):
+        self.api_key = os.getenv("ANTHROPIC_API_KEY")
+        self.client = anthropic.Anthropic(api_key=self.api_key) if self.api_key else None
 
-    def _extract_resume_skills ( self, resume_text: str ) -> List[str] :
-        """Extract skills from resume text using simple pattern matching"""
-        common_skills = [
-            'python', 'java', 'javascript', 'typescript', 'react', 'node', 'sql',
-            'machine learning', 'ml', 'deep learning', 'nlp', 'computer vision',
-            'tensorflow', 'pytorch', 'scikit-learn', 'pandas', 'numpy',
-            'aws', 'azure', 'gcp', 'docker', 'kubernetes', 'git',
-            'spring boot', 'django', 'flask', 'fastapi', 'express',
-            'mongodb', 'postgresql', 'mysql', 'redis', 'kafka',
-            'data analysis', 'statistics', 'r', 'tableau', 'powerbi'
+        if not self.client:
+            logger.warning("⚠️  Anthropic not configured — using rule-based explanations")
+
+    # ------------------------------------------------------------------
+    # Skill extraction & scoring
+    # ------------------------------------------------------------------
+
+    def _extract_resume_skills(self, resume_text: str) -> List[str]:
+        skills = [
+            "python", "java", "javascript", "react", "node",
+            "sql", "aws", "docker", "machine learning", "ai",
+            "tensorflow", "pytorch", "django", "spring"
         ]
+        text = resume_text.lower()
+        return [s for s in skills if s in text]
 
-        resume_lower = resume_text.lower()
-        found_skills = [skill for skill in common_skills if skill in resume_lower]
-        return found_skills
-
-    def _calculate_skill_match ( self, resume_skills: List[str], job_skills: List[str] ) -> float :
-        """
-        Calculate skill overlap score
-
-        Returns:
-            Score between 0-100
-        """
-        if not job_skills :
+    def _skill_match_score(
+        self,
+        resume_skills: List[str],
+        job_skills: List[str]
+    ) -> float:
+        if not job_skills:
             return 0.0
 
-        resume_skills_lower = [s.lower() for s in resume_skills]
-        job_skills_lower = [s.lower() for s in job_skills]
+        r = set(s.lower() for s in resume_skills)
+        j = set(s.lower() for s in job_skills)
 
-        matched = sum( 1 for skill in job_skills_lower if skill in resume_skills_lower )
-        return (matched / len( job_skills_lower )) * 100
+        return (len(r & j) / len(j)) * 100
 
-    def generate_explanation (
-            self,
-            resume_text: str,
-            job: Dict[str, Any],
-            match_score: float
-    ) -> Dict[str, Any] :
-        """
-        Generate explainable match reasoning using RAG
+    # ------------------------------------------------------------------
+    # Explanation generation
+    # ------------------------------------------------------------------
 
-        Args:
-            resume_text: Full resume text
-            job: Retrieved job posting
-            match_score: Calculated match score
+    def _fallback_explanation(
+        self,
+        matched: List[str],
+        missing: List[str],
+        score: float
+    ) -> str:
+        if score >= 75:
+            base = "Strong match for this role."
+        elif score >= 55:
+            base = "Moderate match with some gaps."
+        else:
+            base = "Low match based on current skills."
 
-        Returns:
-            Dict with matched_skills, missing_skills, explanation, and recommendation
-        """
-        resume_skills = self._extract_resume_skills( resume_text )
-        job_skills_required = job['skills_required']
-        job_skills_preferred = job.get( 'skills_preferred', [] )
+        if matched:
+            base += f" Matching skills: {', '.join(matched[:4])}."
+        if missing:
+            base += f" Missing skills: {', '.join(missing[:3])}."
 
-        # Calculate matches
-        matched_skills = [
-            skill for skill in job_skills_required
-            if skill.lower() in [s.lower() for s in resume_skills]
-        ]
+        return base
 
-        missing_required = [
-            skill for skill in job_skills_required
-            if skill.lower() not in [s.lower() for s in resume_skills]
-        ]
+    def _llm_explanation(
+        self,
+        resume_text: str,
+        job: Dict[str, Any],
+        matched: List[str],
+        missing: List[str]
+    ) -> str:
+        prompt = f"""
+Analyze the resume-job fit briefly.
 
-        missing_preferred = [
-            skill for skill in job_skills_preferred
-            if skill.lower() not in [s.lower() for s in resume_skills]
-        ]
+JOB: {job['title']} at {job['company']}
+SKILLS REQUIRED: {', '.join(job['skills_required'])}
 
-        # Generate LLM explanation if API available
-        if self.client :
-            try :
-                explanation = self._generate_llm_explanation(
-                    resume_text, job, matched_skills, missing_required, missing_preferred
-                )
-            except Exception as e :
-                logger.error( f"LLM explanation failed: {e}" )
-                explanation = self._generate_fallback_explanation(
-                    matched_skills, missing_required, match_score
-                )
-        else :
-            explanation = self._generate_fallback_explanation(
-                matched_skills, missing_required, match_score
-            )
+MATCHED SKILLS: {', '.join(matched) or 'None'}
+MISSING SKILLS: {', '.join(missing) or 'None'}
 
-        return {
-            "matched_skills" : matched_skills,
-            "missing_required_skills" : missing_required,
-            "missing_preferred_skills" : missing_preferred,
-            "explanation" : explanation,
-            "recommendation" : self._generate_recommendation( match_score )
-        }
+Provide a concise 2-sentence explanation.
+"""
 
-    def _generate_llm_explanation (
-            self,
-            resume_text: str,
-            job: Dict[str, Any],
-            matched_skills: List[str],
-            missing_required: List[str],
-            missing_preferred: List[str]
-    ) -> str :
-        """Generate explanation using Claude with RAG"""
-
-        prompt = f"""You are an expert career advisor analyzing job fit based on RETRIEVED job posting data.
-
-RETRIEVED JOB POSTING:
-Title: {job['title']}
-Company: {job['company']}
-Description: {job['job_description']}
-
-CANDIDATE RESUME EXTRACT:
-{resume_text[:1500]}
-
-ANALYSIS RESULTS:
-- Matched Required Skills: {', '.join( matched_skills ) if matched_skills else 'None'}
-- Missing Required Skills: {', '.join( missing_required ) if missing_required else 'None'}
-- Missing Preferred Skills: {', '.join( missing_preferred ) if missing_preferred else 'None'}
-
-INSTRUCTIONS:
-1. Explain why this job matches or doesn't match based ONLY on the retrieved job description above
-2. Cite specific requirements from the job posting
-3. Be honest about skill gaps
-4. Keep explanation under 150 words
-5. Use evidence-based reasoning
-
-Provide a concise, actionable explanation:"""
-
-        message = self.client.messages.create(
+        response = self.client.messages.create(
             model="claude-sonnet-4-20250514",
-            max_tokens=300,
-            messages=[{"role" : "user", "content" : prompt}]
+            max_tokens=120,
+            messages=[{"role": "user", "content": prompt}]
         )
 
-        return message.content[0].text.strip()
+        return response.content[0].text.strip()
 
-    def _generate_fallback_explanation (
-            self,
-            matched_skills: List[str],
-            missing_required: List[str],
-            match_score: float
-    ) -> str :
-        """Generate rule-based explanation when LLM unavailable"""
+    def _recommendation(self, score: float) -> str:
+        if score >= 75:
+            return "Highly Recommended"
+        if score >= 60:
+            return "Recommended"
+        if score >= 45:
+            return "Consider"
+        return "Not Recommended"
 
-        if match_score >= 70 :
-            tone = "Strong match"
-        elif match_score >= 50 :
-            tone = "Moderate match"
-        else :
-            tone = "Weak match"
+    # ------------------------------------------------------------------
+    # MAIN ENTRY POINT
+    # ------------------------------------------------------------------
 
-        explanation = f"{tone} based on skill analysis. "
+    def match_jobs(
+        self,
+        resume_text: str,
+        retrieved_jobs: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
 
-        if matched_skills :
-            explanation += f"You have {len( matched_skills )} required skills: {', '.join( matched_skills[:3] )}. "
-
-        if missing_required :
-            explanation += f"Missing {len( missing_required )} required skills: {', '.join( missing_required[:3] )}. "
-
-        if match_score >= 60 :
-            explanation += "Consider applying and highlighting your matching skills."
-        elif missing_required :
-            explanation += "Consider upskilling in missing areas before applying."
-
-        return explanation
-
-    def _generate_recommendation ( self, match_score: float ) -> str :
-        """Generate application recommendation"""
-        if match_score >= 75 :
-            return "Highly Recommended - Strong fit, apply immediately"
-        elif match_score >= 60 :
-            return "Recommended - Good fit with minor gaps"
-        elif match_score >= 45 :
-            return "Consider - Requires upskilling in key areas"
-        else :
-            return "Not Recommended - Significant skill gaps"
-
-    def match_jobs (
-            self,
-            resume_text: str,
-            retrieved_jobs: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]] :
-        """
-        Process retrieved jobs and generate explainable matches
-
-        Args:
-            resume_text: Full resume text
-            retrieved_jobs: Jobs from vector store
-
-        Returns:
-            Jobs with match scores, explanations, and recommendations
-        """
-        resume_skills = self._extract_resume_skills( resume_text )
+        resume_skills = self._extract_resume_skills(resume_text)
         results = []
 
-        for job in retrieved_jobs :
-            # Calculate comprehensive match score
-            skill_score = self._calculate_skill_match(
+        for job in retrieved_jobs:
+            skill_score = self._skill_match_score(
                 resume_skills,
-                job['skills_required']
+                job.get("skills_required", [])
             )
 
-            semantic_score = job['similarity_score']
+            semantic_score = job.get("similarity_score", 0)
+            final_score = round((0.6 * skill_score) + (0.4 * semantic_score), 2)
 
-            # Weighted final score (60% skills, 40% semantic)
-            final_score = (0.6 * skill_score) + (0.4 * semantic_score)
+            matched = [
+                s for s in job.get("skills_required", [])
+                if s.lower() in (x.lower() for x in resume_skills)
+            ]
 
-            # Generate explanation
-            analysis = self.generate_explanation( resume_text, job, final_score )
+            missing = [
+                s for s in job.get("skills_required", [])
+                if s.lower() not in (x.lower() for x in resume_skills)
+            ]
 
-            results.append( {
-                "job_id" : job['job_id'],
-                "title" : job['title'],
-                "company" : job['company'],
-                "location" : job['location'],
-                "employment_type" : job['employment_type'],
-                "salary_range" : job['salary_range'],
-                "apply_link" : job['apply_link'],
-                "match_score" : round( final_score, 2 ),
-                "skill_match_score" : round( skill_score, 2 ),
-                "semantic_match_score" : round( semantic_score, 2 ),
-                "matched_skills" : analysis['matched_skills'],
-                "missing_required_skills" : analysis['missing_required_skills'],
-                "missing_preferred_skills" : analysis['missing_preferred_skills'],
-                "explanation" : analysis['explanation'],
-                "recommendation" : analysis['recommendation']
-            } )
+            # Explanation
+            if self.client and final_score >= 60:
+                try:
+                    explanation = self._llm_explanation(
+                        resume_text, job, matched, missing
+                    )
+                except Exception as e:
+                    logger.debug(f"LLM failed: {e}")
+                    explanation = self._fallback_explanation(
+                        matched, missing, final_score
+                    )
+            else:
+                explanation = self._fallback_explanation(
+                    matched, missing, final_score
+                )
 
-        # Sort by final match score
-        results.sort( key=lambda x : x['match_score'], reverse=True )
+            # 🔑 FRONTEND-READY OBJECT (NO NESTING)
+            results.append({
+                "job_id": job["job_id"],
+                "title": job["title"],
+                "company": job["company"],
+                "location": job["location"],
+                "employment_type": job.get("employment_type", "Full-time"),
+                "salary_range": job.get("salary_range", "Not specified"),
+                "apply_link": job.get("apply_link", ""),
+                "match_score": final_score,
+                "similarity_score": semantic_score,
+                "matched_skills": matched,
+                "missing_required_skills": missing,
+                "explanation": explanation,
+                "recommendation": self._recommendation(final_score)
+            })
 
-        return results
+        # Sort best matches first
+        return sorted(results, key=lambda x: x["match_score"], reverse=True)

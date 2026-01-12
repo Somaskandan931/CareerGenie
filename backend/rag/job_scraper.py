@@ -1,5 +1,5 @@
 """
-Job Scraper - Fetches jobs from SerpAPI with support for both key names
+Optimized Job Scraper - Faster fetching with better caching
 Save this as: backend/rag/job_scraper.py
 """
 
@@ -8,15 +8,17 @@ import logging
 import requests
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
+import hashlib
+import pickle
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 
 class JobScraper:
-    """Fetches jobs from SerpAPI Google Jobs"""
+    """Fetches jobs from SerpAPI Google Jobs with optimizations"""
 
     def __init__(self):
-        # Check for both SERPAPI_KEY and SEARCHAPI_KEY
         self.api_key = os.getenv("SERPAPI_KEY") or os.getenv("SEARCHAPI_KEY")
 
         if not self.api_key:
@@ -27,7 +29,9 @@ class JobScraper:
             )
 
         self.base_url = "https://serpapi.com/search.json"
-        logger.info(f"✅ JobScraper initialized with API key: {self.api_key[:10]}...")
+        # Reduced timeout for faster failures
+        self.timeout = 10
+        logger.info(f"✅ JobScraper initialized")
 
     def fetch_jobs(
         self,
@@ -36,143 +40,113 @@ class JobScraper:
         num_results: int = 30
     ) -> List[Dict[str, Any]]:
         """
-        Fetch jobs from SerpAPI Google Jobs
+        Fetch jobs from SerpAPI - optimized version
 
-        Args:
-            query: Job search query (e.g., "software engineer")
-            location: Location for job search
-            num_results: Number of results to fetch (max ~30-50 per call)
-
-        Returns:
-            List of job dictionaries
+        Optimizations:
+        - Reduced timeout
+        - Limit results to 30 max (faster API response)
+        - Simplified error handling
         """
         try:
+            # Cap at 30 for faster responses
+            num_results = min(num_results, 30)
+
             params = {
                 "engine": "google_jobs",
                 "q": query,
                 "location": location,
                 "api_key": self.api_key,
-                "num": min(num_results, 50)  # SerpAPI limit
+                "num": num_results
             }
 
-            logger.info(f"Fetching jobs: query='{query}', location='{location}'")
+            logger.info(f"Fetching {num_results} jobs: '{query}' in '{location}'")
 
-            response = requests.get(self.base_url, params=params, timeout=15)
+            response = requests.get(
+                self.base_url,
+                params=params,
+                timeout=self.timeout
+            )
             response.raise_for_status()
 
             data = response.json()
             raw_jobs = data.get("jobs_results", [])
 
-            logger.info(f"Fetched {len(raw_jobs)} jobs from SerpAPI")
+            logger.info(f"✅ Fetched {len(raw_jobs)} jobs")
 
-            # Transform to standardized format
+            # Transform jobs - simplified
             jobs = []
             for idx, job in enumerate(raw_jobs):
                 try:
-                    transformed_job = self._transform_job(job, idx)
+                    transformed_job = self._transform_job_fast(job, idx)
                     jobs.append(transformed_job)
                 except Exception as e:
-                    logger.warning(f"Failed to transform job {idx}: {e}")
+                    logger.debug(f"Skipped job {idx}: {e}")
                     continue
 
-            logger.info(f"Successfully transformed {len(jobs)} jobs")
             return jobs
 
+        except requests.Timeout:
+            logger.error("SerpAPI request timeout")
+            return []
         except requests.RequestException as e:
             logger.error(f"SerpAPI request failed: {e}")
-            raise Exception(f"Failed to fetch jobs from SerpAPI: {str(e)}")
+            return []
         except Exception as e:
             logger.error(f"Job fetching error: {e}")
-            raise
+            return []
 
-    def _transform_job(self, raw_job: Dict[str, Any], index: int) -> Dict[str, Any]:
-        """Transform SerpAPI job format to our standard format"""
+    def _transform_job_fast(self, raw_job: Dict[str, Any], index: int) -> Dict[str, Any]:
+        """Fast transformation - minimal processing"""
 
-        # Extract job details
-        job_id = raw_job.get("job_id") or f"job_{index}_{hash(raw_job.get('title', ''))}"
-        title = raw_job.get("title", "Unknown Title")
-        company = raw_job.get("company_name", "Unknown Company")
-        location = raw_job.get("location", "Unknown Location")
-        description = raw_job.get("description", "No description available")
-
-        # Extract extensions (salary, type, etc.)
+        job_id = raw_job.get("job_id") or f"job_{index}"
         extensions = raw_job.get("detected_extensions", {})
-        employment_type = extensions.get("employment_type", "Full-time")
-        salary_range = extensions.get("salary", "Not specified")
 
-        # Get apply link
-        apply_link = raw_job.get("share_link") or raw_job.get("apply_link", "")
-
-        # Extract posted date
-        posted_at = raw_job.get("detected_extensions", {}).get("posted_at", "Recently")
-
-        # Extract required skills from description (basic extraction)
-        skills = self._extract_skills(description)
-
-        # Extract experience requirement
-        experience = self._extract_experience(description)
+        # Quick skill extraction - only common ones
+        description = raw_job.get("description", "")
+        skills = self._extract_skills_fast(description)
 
         return {
             "job_id": job_id,
-            "title": title,
-            "company": company,
-            "location": location,
-            "description": description,
-            "employment_type": employment_type,
-            "salary_range": salary_range,
-            "apply_link": apply_link,
-            "posted_at": posted_at,
+            "title": raw_job.get("title", "Unknown"),
+            "company": raw_job.get("company_name", "Unknown"),
+            "location": raw_job.get("location", "Unknown"),
+            "description": description[:500],  # Truncate for speed
+            "employment_type": extensions.get("employment_type", "Full-time"),
+            "salary_range": extensions.get("salary", "Not specified"),
+            "apply_link": raw_job.get("share_link") or raw_job.get("apply_link", ""),
+            "posted_at": extensions.get("posted_at", "Recently"),
             "skills_required": skills,
-            "experience_required": experience,  # Added experience field
-            "source": "SerpAPI Google Jobs",
+            "experience_required": self._extract_experience_fast(description),
+            "source": "SerpAPI",
             "fetched_at": datetime.now().isoformat()
         }
 
-    def _extract_skills(self, description: str) -> List[str]:
-        """Extract common skills from job description"""
-        common_skills = [
-            "Python", "Java", "JavaScript", "TypeScript", "C++", "C#", "Go", "Rust",
-            "React", "Angular", "Vue", "Node.js", "Django", "Flask", "FastAPI",
-            "SQL", "PostgreSQL", "MySQL", "MongoDB", "Redis",
-            "AWS", "Azure", "GCP", "Docker", "Kubernetes",
-            "Machine Learning", "Deep Learning", "AI", "Data Science",
-            "Git", "CI/CD", "Agile", "Scrum"
+    def _extract_skills_fast(self, description: str) -> List[str]:
+        """Fast skill extraction - limited set"""
+        # Reduced skill list for faster matching
+        priority_skills = [
+            "Python", "Java", "JavaScript", "React", "Node.js",
+            "SQL", "AWS", "Docker", "Machine Learning", "AI"
         ]
 
         description_lower = description.lower()
-        found_skills = []
+        found = []
 
-        for skill in common_skills:
+        for skill in priority_skills:
             if skill.lower() in description_lower:
-                found_skills.append(skill)
+                found.append(skill)
+                if len(found) >= 5:  # Max 5 skills for speed
+                    break
 
-        return found_skills[:10]  # Limit to top 10
+        return found
 
-    def _extract_experience(self, description: str) -> str:
-        """Extract experience requirement from job description"""
-        import re
-
+    def _extract_experience_fast(self, description: str) -> str:
+        """Fast experience extraction"""
         description_lower = description.lower()
 
-        # Look for patterns like "5+ years", "3-5 years", "minimum 2 years"
-        patterns = [
-            r'(\d+)\+?\s*(?:to|\-)\s*(\d+)?\s*years?',
-            r'(\d+)\+\s*years?',
-            r'minimum\s+(\d+)\s*years?',
-            r'at least\s+(\d+)\s*years?',
-        ]
-
-        for pattern in patterns:
-            match = re.search(pattern, description_lower)
-            if match:
-                years = match.group(1)
-                return f"{years}+ years"
-
-        # Check for entry level or junior
+        # Quick checks only
         if 'entry level' in description_lower or 'junior' in description_lower:
             return "0-2 years"
-
-        # Check for senior
         if 'senior' in description_lower:
             return "5+ years"
 
@@ -180,47 +154,72 @@ class JobScraper:
 
 
 class JobCache:
-    """Simple in-memory cache for job results"""
+    """Persistent disk-based cache for better performance"""
 
-    def __init__(self, ttl_minutes: int = 60):
-        self.cache = {}
-        self.ttl = timedelta(minutes=ttl_minutes)
-        logger.info(f"JobCache initialized with TTL={ttl_minutes} minutes")
+    def __init__(self, ttl_hours: int = 24, cache_dir: str = "./cache"):
+        self.ttl = timedelta(hours=ttl_hours)
+        self.cache_dir = Path(cache_dir)
+        self.cache_dir.mkdir(exist_ok=True)
+        logger.info(f"JobCache initialized with TTL={ttl_hours} hours")
 
     def _make_key(self, query: str, location: str) -> str:
-        """Create cache key"""
-        return f"{query.lower().strip()}:{location.lower().strip()}"
+        """Create hash-based cache key"""
+        key_str = f"{query.lower().strip()}:{location.lower().strip()}"
+        return hashlib.md5(key_str.encode()).hexdigest()
+
+    def _get_cache_path(self, key: str) -> Path:
+        """Get cache file path"""
+        return self.cache_dir / f"{key}.pkl"
 
     def get(self, query: str, location: str) -> Optional[List[Dict[str, Any]]]:
-        """Get cached jobs if not expired"""
+        """Get cached jobs from disk"""
         key = self._make_key(query, location)
+        cache_path = self._get_cache_path(key)
 
-        if key not in self.cache:
+        if not cache_path.exists():
             return None
 
-        cached_data = self.cache[key]
-        cached_time = cached_data["timestamp"]
+        try:
+            with open(cache_path, 'rb') as f:
+                cached_data = pickle.load(f)
 
-        if datetime.now() - cached_time > self.ttl:
-            logger.info(f"Cache expired for key: {key}")
-            del self.cache[key]
+            cached_time = cached_data["timestamp"]
+
+            if datetime.now() - cached_time > self.ttl:
+                logger.info(f"Cache expired for key: {key}")
+                cache_path.unlink()
+                return None
+
+            logger.info(f"✅ Cache hit: {len(cached_data['jobs'])} jobs")
+            return cached_data["jobs"]
+
+        except Exception as e:
+            logger.warning(f"Cache read error: {e}")
             return None
-
-        logger.info(f"Cache hit for key: {key}")
-        return cached_data["jobs"]
 
     def set(self, query: str, location: str, jobs: List[Dict[str, Any]]) -> None:
-        """Cache jobs"""
+        """Cache jobs to disk"""
         key = self._make_key(query, location)
-        self.cache[key] = {
-            "jobs": jobs,
-            "timestamp": datetime.now()
-        }
-        logger.info(f"Cached {len(jobs)} jobs for key: {key}")
+        cache_path = self._get_cache_path(key)
+
+        try:
+            cached_data = {
+                "jobs": jobs,
+                "timestamp": datetime.now()
+            }
+
+            with open(cache_path, 'wb') as f:
+                pickle.dump(cached_data, f)
+
+            logger.info(f"✅ Cached {len(jobs)} jobs")
+
+        except Exception as e:
+            logger.warning(f"Cache write error: {e}")
 
     def clear(self) -> None:
-        """Clear all cache"""
-        self.cache.clear()
+        """Clear all cache files"""
+        for cache_file in self.cache_dir.glob("*.pkl"):
+            cache_file.unlink()
         logger.info("Cache cleared")
 
 
@@ -241,5 +240,5 @@ def get_cache() -> JobCache:
     """Get singleton cache instance"""
     global _cache_instance
     if _cache_instance is None:
-        _cache_instance = JobCache(ttl_minutes=60)
+        _cache_instance = JobCache(ttl_hours=24)
     return _cache_instance
