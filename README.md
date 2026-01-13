@@ -1,48 +1,147 @@
 # Career Genie RAG
 
-**Real-Time Resume-to-Job Matching using Retrieval-Augmented Generation**
+## Real-Time Resume-to-Job Matching using Retrieval-Augmented Generation
 
-Match resumes to live job postings with explainable AI, skill gap analysis, and direct apply links.
+Career Genie is an AI-powered system that matches resumes to live job postings using Retrieval-Augmented Generation (RAG).
+It combines real-time job retrieval, semantic vector search, and large language models to produce explainable job matches, skill gap analysis, and direct application links.
+
+This project is designed to reflect real-world GenAI and AI Engineer workflows.
 
 ---
 
-## Quick Start
+## Features
 
-### 1. Install Dependencies
+* Real-time job retrieval from Google Jobs via SerpAPI
+* Resume parsing from PDF and DOCX formats
+* Semantic similarity search using sentence embeddings
+* Vector storage and retrieval with ChromaDB
+* Retrieval-Augmented Generation using Claude (Anthropic)
+* Explainable match scores with evidence-based reasoning
+* Skill overlap and skill gap analysis
+* Intelligent caching with a 24-hour TTL
+* Direct job application links
+* REST API built with FastAPI
+
+---
+
+## Architecture Overview
+
+```
+Resume Upload + Job Query
+         |
+         v
+Fetch Live Jobs (SerpAPI)
+         |
+         v
+Vector Embedding (Sentence Transformers)
+         |
+         v
+Vector Store (ChromaDB)
+         |
+         v
+Semantic Retrieval
+         |
+         v
+RAG Reasoning (Claude LLM)
+         |
+         v
+Explainable Job Matches + Skill Gaps
+```
+
+---
+
+## Project Structure
+
+```
+career-genie-rag/
+├── backend/
+│   ├── parser/
+│   │   ├── extractors.py
+│   │   └── router.py
+│   ├── rag/
+│   │   ├── job_scraper.py
+│   │   ├── matcher.py
+│   │   ├── vector_store.py
+│   │   └── router.py
+│   └── main.py
+├── requirements.txt
+├── .env
+└── README.md
+```
+
+---
+
+## Installation
+
+### 1. Clone the Repository
+
+```bash
+git clone https://github.com/your-username/career-genie-rag.git
+cd career-genie-rag
+```
+
+### 2. Install Dependencies
+
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. Configure Environment
-```bash
-cp .env.template .env
-# Edit .env and add your API keys:
-# - SERPAPI_KEY (get from https://serpapi.com)
-# - ANTHROPIC_API_KEY (get from https://anthropic.com)
-```
+---
 
-### 3. Run Server
-```bash
-uvicorn main:app --reload
-```
+## Environment Configuration
 
-Server: `http://localhost:8000`  
-Docs: `http://localhost:8000/docs`
+Create a `.env` file in the project root:
+
+```bash
+SERPAPI_KEY=your_serpapi_key
+ANTHROPIC_API_KEY=your_anthropic_key
+```
 
 ---
 
-## API Usage
-
-### Real-Time Job Matching
+## Running the Server
 
 ```bash
+uvicorn backend.main:app --reload
+```
+
+Server:
+
+```
+http://localhost:8000
+```
+
+API Documentation:
+
+```
+http://localhost:8000/docs
+```
+
+---
+
+## API Endpoints
+
+### Parse Resume
+
+```
+POST /upload-resume/parse
+```
+
+Uploads and parses a resume file (PDF or DOCX).
+
+---
+
+### Real-Time Job Matching (RAG)
+
+```
 POST /rag/match-realtime
 ```
 
-**Request:**
+#### Request Body
+
 ```json
 {
-  "resume_text": "ML engineer with Python, TensorFlow, 3 years experience",
+  "resume_text": "ML engineer with Python, TensorFlow, and 3 years experience",
   "job_query": "machine learning engineer",
   "location": "India",
   "num_jobs": 50,
@@ -51,68 +150,67 @@ POST /rag/match-realtime
 }
 ```
 
-**Response:**
+#### Response
+
 ```json
 {
   "matched_jobs": [
     {
-      "title": "ML Engineer",
+      "title": "Machine Learning Engineer",
       "company": "Flipkart",
-      "match_score": 78.5,
-      "matched_skills": ["Python", "ML", "TensorFlow"],
-      "missing_required_skills": ["Docker"],
-      "explanation": "Strong match based on your ML experience...",
-      "recommendation": "Recommended - Good fit",
+      "match_score": 82.4,
+      "matched_skills": ["python", "machine learning", "tensorflow"],
+      "missing_required_skills": ["docker"],
+      "explanation": "The candidate demonstrates strong alignment with the role based on machine learning experience and Python proficiency...",
+      "recommendation": "Strong Match",
       "apply_link": "https://careers.flipkart.com/..."
     }
   ],
   "jobs_fetched": 50,
   "total_matches": 10,
-  "cache_used": false
+  "cache_used": true
 }
 ```
 
 ---
 
-## Architecture
+### Vector Store Statistics
 
 ```
-Resume Upload + Job Query
-         ↓
-Fetch Live Jobs (SerpAPI)
-         ↓
-Auto-Index to Vector DB (ChromaDB)
-         ↓
-Semantic Search
-         ↓
-RAG Reasoning (Claude)
-         ↓
-Explainable Matches
+GET /rag/stats
 ```
+
+Returns information about indexed jobs and cache configuration.
 
 ---
 
-## Features
+## How It Works
 
-- **Real-Time Jobs**: Fetch live postings from Google Jobs
-- **Auto Skill Extraction**: Detect skills from job descriptions
-- **Vector Search**: Semantic matching with embeddings
-- **RAG Explanations**: Evidence-backed match reasoning
-- **Skill Gap Analysis**: Show matched and missing skills
-- **Direct Apply Links**: One-click job applications
-- **Intelligent Caching**: 24-hour cache for performance
+### Retrieval
+
+Live job postings are fetched from Google Jobs using SerpAPI based on the user’s query and location.
+
+### Augmentation
+
+Job descriptions are embedded using sentence transformers and stored in ChromaDB for semantic search.
+
+### Generation
+
+Claude (Anthropic) generates evidence-based explanations by grounding responses in retrieved job descriptions and resume content.
+
+The system produces match scores, explanations, skill overlap, and skill gaps.
 
 ---
 
 ## Performance
 
-| Metric | Value |
-|--------|-------|
-| First Query | 8-15s |
-| Cached Query | 2-3s |
-| Jobs per Query | 50+ |
-| Cache Duration | 24 hours |
-| Match Accuracy | 78%+ |
+| Metric                   | Value        |
+| ------------------------ | ------------ |
+| First query latency      | 8–15 seconds |
+| Cached query latency     | 2–3 seconds  |
+| Jobs retrieved per query | 50+          |
+| Cache duration           | 24 hours     |
+| Average match accuracy   | 78%+         |
 
 ---
 
@@ -124,123 +222,37 @@ python test_realtime_rag.py
 
 ---
 
-## Project Structure
+## Production Considerations
 
-```
-career-genie-rag/
-├── backend/
-│   ├── rag/              # RAG system
-│   │   ├── vector_store.py
-│   │   ├── matcher.py
-│   │   ├── job_scraper.py
-│   │   └── router.py
-│   ├── parser/           # Resume parsing
-│   ├── builder/          # Resume generation
-│   └── job_search/       # Legacy search
-├── main.py               # FastAPI app
-├── requirements.txt
-├── .env
-└── README.md
-```
+* Replace in-memory ChromaDB with persistent storage
+* Add Redis for distributed caching
+* Implement rate limiting and authentication
+* Use background workers for job ingestion
+* Add structured logging and monitoring
 
 ---
 
-## 🔑 Environment Variables
+## Technologies Used
 
-```bash
-SERPAPI_KEY=your_key          # For real-time job fetching
-ANTHROPIC_API_KEY=your_key    # For RAG explanations
-```
-
----
-
-## API Endpoints
-
-- `POST /rag/match-realtime` - Real-time job matching
-- `GET /rag/stats` - Vector store statistics
-- `POST /upload-resume/parse` - Parse resume
-- `POST /build-resume` - Generate resume PDF
-- `POST /search-jobs` - Legacy job search
+* FastAPI
+* ChromaDB
+* Sentence Transformers
+* Anthropic Claude
+* SerpAPI
+* Python
 
 ---
 
-## Example Usage
+## Resume Description
 
-### Python
-```python
-import requests
+This project demonstrates experience in:
 
-response = requests.post("http://localhost:8000/rag/match-realtime", json={
-    "resume_text": "Python developer with Django, 2 years",
-    "job_query": "python developer",
-    "location": "Bangalore",
-    "num_jobs": 30,
-    "top_k": 5
-})
-
-jobs = response.json()["matched_jobs"]
-for job in jobs:
-    print(f"{job['title']} - Score: {job['match_score']}")
-```
-
-### cURL
-```bash
-curl -X POST http://localhost:8000/rag/match-realtime \
-  -H "Content-Type: application/json" \
-  -d '{"resume_text":"ML engineer","job_query":"machine learning","location":"India","num_jobs":20,"top_k":5}'
-```
-
----
-
-## How It Works
-
-### 1. Retrieval
-Fetches 50+ live jobs from Google Jobs via SerpAPI based on your query.
-
-### 2. Augmentation
-Auto-extracts skills, indexes jobs to ChromaDB with semantic embeddings.
-
-### 3. Generation
-Uses Claude to generate evidence-backed match explanations citing specific job requirements.
-
-**Result**: Explainable matches with skill gaps, recommendations, and apply links.
-
----
-
-## Scaling
-
-For production:
-- Use Redis for distributed caching
-- Implement rate limiting
-- Add background job processing
-- Set up monitoring/logging
-
----
-
-## Troubleshooting
-
-**Server won't start**
-```bash
-pip install -r requirements.txt --force-reinstall
-```
-
-**No jobs found**
-```bash
-# Check API key
-cat .env | grep SERPAPI_KEY
-
-# Try broader query
-"job_query": "engineer"  # Instead of very specific
-```
-
-**Slow responses**
-```bash
-# Enable cache
-"use_cache": true
-
-# Reduce jobs
-"num_jobs": 20  # Instead of 100
-```
+* Retrieval-Augmented Generation (RAG)
+* Semantic search and vector databases
+* Large language model integration
+* Explainable AI systems
+* API design and backend engineering
+* Real-time data ingestion pipelines
 
 ---
 
@@ -250,15 +262,3 @@ MIT License
 
 ---
 
-## Credits
-
-Built with:
-- FastAPI
-- ChromaDB
-- Sentence Transformers
-- Anthropic Claude
-- SerpAPI
-
----
-
-**Ready to match resumes?**

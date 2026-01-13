@@ -1,23 +1,31 @@
-from pdfminer.high_level import extract_text
-from docx import Document
-import re
+import pdfplumber
+import docx
+from typing import Dict
 
-def extract_from_pdf(file_path: str) -> str:
-    return extract_text(file_path)
 
-def extract_from_docx(file_path: str) -> str:
-    doc = Document(file_path)
-    return "\n".join([para.text for para in doc.paragraphs])
+def extract_text_from_pdf(file_path: str) -> str:
+    text = []
+    with pdfplumber.open(file_path) as pdf:
+        for page in pdf.pages:
+            if page.extract_text():
+                text.append(page.extract_text())
+    return "\n".join(text)
 
-def parse_resume_text(text: str) -> dict:
-    # Very basic regex parsers (you can improve this)
-    email = re.search(r"[\w\.-]+@[\w\.-]+", text)
-    phone = re.search(r"\+?\d[\d\s\-]{7,}", text)
-    skills = re.findall(r"\b(?:Python|Java|SQL|React|Node|C\+\+|Machine Learning|AI)\b", text, re.I)
+
+def extract_text_from_docx(file_path: str) -> str:
+    doc = docx.Document(file_path)
+    return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+
+
+def extract_resume(file_path: str) -> Dict:
+    if file_path.endswith(".pdf"):
+        text = extract_text_from_pdf(file_path)
+    elif file_path.endswith(".docx"):
+        text = extract_text_from_docx(file_path)
+    else:
+        raise ValueError("Unsupported resume format")
 
     return {
-        "email": email.group(0) if email else None,
-        "phone": phone.group(0) if phone else None,
-        "skills": list(set([s.lower() for s in skills])),
-        "raw_text": text[:1000]  # Optional preview
+        "resume_text": text.strip(),
+        "length": len(text.split())
     }
