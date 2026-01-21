@@ -1,264 +1,381 @@
-# Career Genie RAG
+# Career Genie 
 
-## Real-Time Resume-to-Job Matching using Retrieval-Augmented Generation
+![Career Genie Banner](https://img.shields.io/badge/AI-Powered-blue) ![Python](https://img.shields.io/badge/Python-3.8+-green) ![React](https://img.shields.io/badge/React-18+-61dafb) ![FastAPI](https://img.shields.io/badge/FastAPI-Latest-009688)
 
-Career Genie is an AI-powered system that matches resumes to live job postings using Retrieval-Augmented Generation (RAG).
-It combines real-time job retrieval, semantic vector search, and large language models to produce explainable job matches, skill gap analysis, and direct application links.
+**AI-Powered Job Discovery with Skill Gap Analysis & Personalized Learning Paths**
 
-This project is designed to reflect real-world GenAI and AI Engineer workflows.
-
----
-
-## Features
-
-* Real-time job retrieval from Google Jobs via SerpAPI
-* Resume parsing from PDF and DOCX formats
-* Semantic similarity search using sentence embeddings
-* Vector storage and retrieval with ChromaDB
-* Retrieval-Augmented Generation using Claude (Anthropic)
-* Explainable match scores with evidence-based reasoning
-* Skill overlap and skill gap analysis
-* Intelligent caching with a 24-hour TTL
-* Direct job application links
-* REST API built with FastAPI
+Career Genie is an intelligent career platform that uses RAG (Retrieval Augmented Generation) and AI to match your resume with relevant jobs, identify skill gaps, and provide personalized career guidance.
 
 ---
 
-## Architecture Overview
+##  Features
+
+### **Smart Job Matching**
+- **RAG-Powered Matching**: Uses vector embeddings and semantic search to find jobs that match your skills and experience
+- **Real-time Job Search**: Scrapes live jobs from Google Jobs via SerpAPI
+- **AI-Generated Explanations**: Claude AI explains why each job is a good match for you
+- **Match Scoring**: Get detailed match scores (0-100%) with skill breakdowns
+
+###  **Skill Assessment Dashboard**
+- **Visual Skill Analysis**: See your skills categorized and scored
+- **Matched Skills**: Identify which of your skills align with job requirements
+- **Skill Gaps**: Discover critical skills you need to develop
+- **Bonus Skills**: Highlight additional skills that make you stand out
+
+###  **Career Guidance**
+- **Personalized Career Advice**: AI-generated assessment of your current position
+- **Learning Path Recommendations**: Curated courses and resources for skill development
+- **Career Progression Roadmap**: Clear timeline from entry-level to senior roles
+- **Market Insights**: Current salary expectations and industry trends
+- **Actionable Plans**: Step-by-step actions for career advancement
+
+###  **Advanced Filtering**
+- Filter by experience level (Entry/Mid/Senior)
+- Minimum match score threshold
+- Job posting recency (7/14/30/60 days)
+- Remote/on-site preferences
+- Quality scoring to avoid scam listings
+
+---
+
+##  Architecture
 
 ```
-Resume Upload + Job Query
-         |
-         v
-Fetch Live Jobs (SerpAPI)
-         |
-         v
-Vector Embedding (Sentence Transformers)
-         |
-         v
-Vector Store (ChromaDB)
-         |
-         v
-Semantic Retrieval
-         |
-         v
-RAG Reasoning (Claude LLM)
-         |
-         v
-Explainable Job Matches + Skill Gaps
+┌─────────────────┐
+│   React Frontend│
+│   (Tailwind CSS)│
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│  FastAPI Backend│
+│                 │
+├─────────────────┤
+│ • Resume Parser │
+│ • Job Scraper   │
+│ • Vector Store  │
+│ • AI Matcher    │
+│ • Career Advisor│
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────────────────┐
+│  External Services          │
+├─────────────────────────────┤
+│ • SerpAPI (Job Search)      │
+│ • Claude AI (Matching)      │
+│ • ChromaDB (Vector Storage) │
+│ • Sentence Transformers     │
+└─────────────────────────────┘
 ```
+
+### **RAG Pipeline**
+
+1. **Retrieval**: Semantic search finds relevant jobs using vector embeddings
+2. **Augmentation**: Context includes resume, job description, and matched skills
+3. **Generation**: Claude AI generates personalized explanations and career advice
+
+---
+
+##  Getting Started
+
+### **Prerequisites**
+
+- Python 3.8+
+- Node.js 16+
+- npm or yarn
+
+### **API Keys Required**
+
+1. **SerpAPI Key**: For job searching
+   - Sign up at [serpapi.com](https://serpapi.com/)
+   - Free tier: 100 searches/month
+
+2. **Anthropic API Key**: For AI-powered matching and career advice
+   - Sign up at [console.anthropic.com](https://console.anthropic.com/)
+   - Get API key from settings
+
+---
+
+## Installation
+
+### **1. Clone the Repository**
+
+```bash
+git clone https://github.com/somaskandan931/career-genie.git
+cd career-genie
+```
+
+### **2. Backend Setup**
+
+```bash
+cd backend
+
+# Create virtual environment
+python -m venv venv
+
+# Activate virtual environment
+# Windows:
+venv\Scripts\activate
+# Mac/Linux:
+source venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Create .env file
+cat > .env << EOL
+SERPAPI_KEY=your_serpapi_key_here
+ANTHROPIC_API_KEY=your_anthropic_key_here
+CLAUDE_MODEL=claude-sonnet-4-20250514
+EMBEDDING_MODEL=all-MiniLM-L6-v2
+CHROMA_PERSIST_DIR=./chroma_db
+MAX_TOKENS_CAREER_ADVICE=2000
+EOL
+
+# Run the backend server
+uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+### **3. Frontend Setup**
+
+```bash
+cd frontend/resume-frontend
+
+# Install dependencies
+npm install
+
+# Start development server
+npm start
+```
+
+The app will open at `http://localhost:3000`
+
+---
+
+##  Usage
+
+### **Step 1: Upload Your Resume**
+- Click "Upload Resume" and select your PDF or DOCX file
+- The system will parse and extract your skills
+
+### **Step 2: Search for Jobs**
+- Enter job title/keywords (e.g., "Software Engineer", "Data Scientist")
+- Set location (e.g., "India", "Bangalore", "Remote")
+- Apply advanced filters:
+  - Experience Level
+  - Minimum Match Score
+  - Job Recency
+  - Remote Preferences
+
+### **Step 3: Review Matches**
+- View AI-generated match scores and explanations
+- See matched skills and skill gaps for each job
+- Get personalized recommendations
+
+### **Step 4: Get Career Guidance**
+- Review your skill assessment dashboard
+- Explore learning resources for skill development
+- Follow the career progression roadmap
+- Read market insights and action plans
+
+---
+
+##  Tech Stack
+
+### **Backend**
+- **FastAPI**: Modern, fast web framework
+- **Anthropic Claude**: AI-powered matching and career advice
+- **ChromaDB**: Vector database for semantic search
+- **Sentence Transformers**: Text embeddings
+- **SerpAPI**: Real-time job scraping
+- **pdfplumber & python-docx**: Resume parsing
+
+### **Frontend**
+- **React**: UI framework
+- **Tailwind CSS**: Utility-first styling
+- **Fetch API**: Backend communication
+
+### **AI/ML**
+- **RAG Architecture**: Retrieval Augmented Generation
+- **Semantic Search**: Vector similarity matching
+- **Claude Sonnet 4**: Advanced language model
+- **all-MiniLM-L6-v2**: Embedding model
 
 ---
 
 ## Project Structure
 
 ```
-career-genie-rag/
+career-genie/
 ├── backend/
-│   ├── parser/
-│   │   ├── extractors.py
-│   │   └── router.py
-│   ├── rag/
-│   │   ├── job_scraper.py
-│   │   ├── matcher.py
-│   │   ├── vector_store.py
-│   │   └── router.py
-│   └── main.py
-├── requirements.txt
-├── .env
+│   ├── services/
+│   │   ├── career_advisor.py       # AI career guidance
+│   │   ├── enhanced_skill_extractor.py  # Advanced skill extraction
+│   │   ├── job_filter.py           # Smart job filtering
+│   │   ├── job_scraper.py          # SerpAPI job scraping
+│   │   ├── matcher.py              # RAG-based matching
+│   │   ├── resume_parser.py        # PDF/DOCX parsing
+│   │   └── vector_store.py         # ChromaDB integration
+│   ├── main.py                     # FastAPI application
+│   ├── models.py                   # Pydantic models
+│   ├── config.py                   # Configuration
+│   └── requirements.txt            # Python dependencies
+│
+├── frontend/resume-frontend/
+│   ├── src/
+│   │   ├── components/
+│   │   │   ├── JobSearch.js        # Job search interface
+│   │   │   ├── JobMatches.js       # Match results display
+│   │   │   └── SkillAssessmentDashboard.js  # Skill visualization
+│   │   ├── App.js                  # Main application
+│   │   └── index.js                # Entry point
+│   ├── public/
+│   └── package.json                # Node dependencies
+│
 └── README.md
 ```
 
 ---
 
-## Installation
+## Configuration
 
-### 1. Clone the Repository
+### **Backend Environment Variables**
 
-```bash
-git clone https://github.com/your-username/career-genie-rag.git
-cd career-genie-rag
-```
+| Variable | Description | Required | Default |
+|----------|-------------|----------|---------|
+| `SERPAPI_KEY` | SerpAPI key for job search | Yes | - |
+| `ANTHROPIC_API_KEY` | Claude API key | Yes | - |
+| `CLAUDE_MODEL` | Claude model version | No | `claude-sonnet-4-20250514` |
+| `EMBEDDING_MODEL` | Sentence transformer model | No | `all-MiniLM-L6-v2` |
+| `CHROMA_PERSIST_DIR` | ChromaDB storage path | No | `./chroma_db` |
+| `MAX_TOKENS_CAREER_ADVICE` | Max tokens for career advice | No | `2000` |
 
-### 2. Install Dependencies
+### **Frontend Configuration**
 
-```bash
-pip install -r requirements.txt
-```
+Update `API_BASE_URL` in components if backend runs on a different port:
 
----
-
-## Environment Configuration
-
-Create a `.env` file in the project root:
-
-```bash
-SERPAPI_KEY=your_serpapi_key
-ANTHROPIC_API_KEY=your_anthropic_key
+```javascript
+const API_BASE_URL = 'http://localhost:8000';
 ```
 
 ---
 
-## Running the Server
+##  API Endpoints
 
-```bash
-uvicorn backend.main:app --reload
-```
-
-Server:
-
-```
-http://localhost:8000
-```
-
-API Documentation:
-
-```
-http://localhost:8000/docs
-```
-
----
-
-## API Endpoints
-
-### Parse Resume
-
-```
+### **Resume Operations**
+```http
 POST /upload-resume/parse
+Content-Type: multipart/form-data
+
+Response: {
+  status: "success",
+  resume_text: "...",
+  word_count: 450
+}
 ```
 
-Uploads and parses a resume file (PDF or DOCX).
-
----
-
-### Real-Time Job Matching (RAG)
-
-```
+### **Job Matching**
+```http
 POST /rag/match-realtime
-```
+Content-Type: application/json
 
-#### Request Body
-
-```json
 {
-  "resume_text": "ML engineer with Python, TensorFlow, and 3 years experience",
-  "job_query": "machine learning engineer",
+  "resume_text": "...",
+  "job_query": "software engineer",
   "location": "India",
   "num_jobs": 50,
   "top_k": 10,
-  "use_cache": true
+  "min_match_score": 40,
+  "experience_level": "mid",
+  "posted_within_days": 14,
+  "exclude_remote": false
+}
+
+Response: {
+  "matched_jobs": [...],
+  "career_advice": {...},
+  "skill_comparison": {...},
+  "total_jobs_fetched": 50,
+  "total_jobs_indexed": 48
 }
 ```
 
-#### Response
-
-```json
-{
-  "matched_jobs": [
-    {
-      "title": "Machine Learning Engineer",
-      "company": "Flipkart",
-      "match_score": 82.4,
-      "matched_skills": ["python", "machine learning", "tensorflow"],
-      "missing_required_skills": ["docker"],
-      "explanation": "The candidate demonstrates strong alignment with the role based on machine learning experience and Python proficiency...",
-      "recommendation": "Strong Match",
-      "apply_link": "https://careers.flipkart.com/..."
-    }
-  ],
-  "jobs_fetched": 50,
-  "total_matches": 10,
-  "cache_used": true
-}
-```
-
----
-
-### Vector Store Statistics
-
-```
+### **System Status**
+```http
+GET /config
+GET /health
 GET /rag/stats
 ```
 
-Returns information about indexed jobs and cache configuration.
+---
+
+##  Features in Detail
+
+### **1. Smart Job Filtering**
+- **Quality Scoring**: Filters out scam jobs and low-quality listings
+- **Red Flags**: Detects "work from home scams", "MLM", etc.
+- **Quality Indicators**: Rewards listings with benefits, training, career growth
+
+### **2. Enhanced Skill Extraction**
+- **Context-Aware**: Understands skill proficiency from surrounding text
+- **Multi-Level**: Detects beginner, intermediate, proficient, expert levels
+- **Experience Extraction**: Parses years of experience (e.g., "5+ years Python")
+
+### **3. RAG-Powered Matching**
+- **Semantic Search**: Finds jobs beyond keyword matching
+- **Hybrid Scoring**: Combines semantic similarity + skill matching
+- **AI Explanations**: Claude generates personalized match reasons
+
+### **4. Career Progression Paths**
+- **Role Timeline**: Entry → Mid → Senior level transitions
+- **Skill Requirements**: What you need at each stage
+- **Responsibilities**: Typical duties for each role
 
 ---
 
-## How It Works
+## Example Output
 
-### Retrieval
+### **Match Score Breakdown**
+```
+Overall Match: 85%
+├─ Semantic Similarity: 42/50 points
+├─ Matched Skills: 35/40 points
+└─ Missing Skills Penalty: -7/20 points
 
-Live job postings are fetched from Google Jobs using SerpAPI based on the user’s query and location.
-
-### Augmentation
-
-Job descriptions are embedded using sentence transformers and stored in ChromaDB for semantic search.
-
-### Generation
-
-Claude (Anthropic) generates evidence-based explanations by grounding responses in retrieved job descriptions and resume content.
-
-The system produces match scores, explanations, skill overlap, and skill gaps.
-
----
-
-## Performance
-
-| Metric                   | Value        |
-| ------------------------ | ------------ |
-| First query latency      | 8–15 seconds |
-| Cached query latency     | 2–3 seconds  |
-| Jobs retrieved per query | 50+          |
-| Cache duration           | 24 hours     |
-| Average match accuracy   | 78%+         |
-
----
-
-## Testing
-
-```bash
-python test_realtime_rag.py
+Recommendation: Excellent Match
 ```
 
----
+### **Skill Assessment**
+```
+   Matched Skills (8):
+   Python (Expert, 5 years) ★
+   React (Proficient, 3 years) ★
+   AWS (Intermediate, 2 years) ★
 
-## Production Considerations
+ Skill Gaps (3):
+   Kubernetes: None → Intermediate [Critical]
+   GraphQL: None → Beginner [Moderate]
+   
+ Bonus Skills (5):
+   Django (Advanced)
+   PostgreSQL (Proficient)
+```
 
-* Replace in-memory ChromaDB with persistent storage
-* Add Redis for distributed caching
-* Implement rate limiting and authentication
-* Use background workers for job ingestion
-* Add structured logging and monitoring
-
----
-
-## Technologies Used
-
-* FastAPI
-* ChromaDB
-* Sentence Transformers
-* Anthropic Claude
-* SerpAPI
-* Python
-
----
-
-## Resume Description
-
-This project demonstrates experience in:
-
-* Retrieval-Augmented Generation (RAG)
-* Semantic search and vector databases
-* Large language model integration
-* Explainable AI systems
-* API design and backend engineering
-* Real-time data ingestion pipelines
 
 ---
 
 ## License
 
-MIT License
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ---
+
+## Acknowledgments
+
+- **Anthropic Claude**: For powerful AI capabilities
+- **SerpAPI**: For reliable job search data
+- **ChromaDB**: For efficient vector storage
+- **Sentence Transformers**: For quality embeddings
+- **FastAPI & React**: For excellent developer experience
 
