@@ -158,7 +158,7 @@ Be fair, specific, and constructive."""
 
         try:
             response = self.client.chat.completions.create(
-                model=settings.GROQ_SMART_MODEL,
+                model=settings.GROQ_CHAT_MODEL,
                 max_tokens=settings.MAX_TOKENS_CHAT,
                 messages=[{"role": "system", "content": system}] + messages
             )

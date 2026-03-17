@@ -234,9 +234,15 @@ const JobMatches = ({ jobQuery, jobLocation, resumeText, filters = {}, setCareer
               </div>
             </div>
 
-            {job.explanation && (
+            {(job.explanation || (!job.explanation && (job.matched_skills?.length > 0 || job.missing_skills?.length > 0))) && (
               <div className="mb-4 p-4 bg-blue-50 dark:bg-blue-900/30 rounded-lg border border-blue-200 dark:border-blue-700">
-                <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed">{job.explanation}</p>
+                {job.explanation ? (
+                  <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed">{job.explanation}</p>
+                ) : (
+                  <p className="text-sm text-gray-400 dark:text-gray-500 italic">
+                    AI explanation unavailable — matched {job.matched_skills?.length || 0} skill{job.matched_skills?.length !== 1 ? "s" : ""} from your resume.
+                  </p>
+                )}
               </div>
             )}
 

@@ -294,7 +294,7 @@ Provide a brief, actionable 2-3 sentence explanation:
 
         try :
             response = self.client.chat.completions.create(
-                model="llama3-8b-8192",
+                model=settings.GROQ_CHAT_MODEL,
                 messages=[
                     {"role" : "system", "content" : "You are an expert career advisor."},
                     {"role" : "user", "content" : prompt}

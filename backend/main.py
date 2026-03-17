@@ -26,6 +26,8 @@ from backend.services.market_insights import get_market_insights
 from backend.services.interview_coach import get_interview_coach
 from backend.services.progress_store import progress_store
 from backend.services.progress_tracker import get_progress_tracker
+from backend.services.ats_scorer import ats_scorer
+from backend.services.resume_rewriter import resume_rewriter
 from backend.models import (
     DSAProblem, DSAProgressUpdate, DSABulkUpdate,
     RoadmapCheckpointUpdate,
@@ -33,15 +35,17 @@ from backend.models import (
     InterviewEntryCreate, InterviewRoundAdd, InterviewOutcomeUpdate,
     InterviewRound,
 )
-
+# Add near the other imports
+from backend.services.mentor_service import get_mentor_service
+from backend.models import MentorSearchRequest, BookSessionRequest, SessionFeedbackRequest
 logging.basicConfig( level=logging.INFO,
                      format='%(asctime)s - %(name)s - %(levelname)s - %(message)s' )
 logger = logging.getLogger( __name__ )
 
 app = FastAPI(
     title="Career Genie – TN AUTO SkillBridge",
-    description="AI-powered workforce analytics · Job Coach · Market Insights · Interview Coach",
-    version="3.0.0"
+    description="AI-powered workforce analytics · Job Coach · Market Insights · Interview Coach · Resume Rewriter",
+    version="4.0.0"
 )
 
 app.add_middleware(
@@ -126,6 +130,14 @@ class EvaluateAnswerRequest( BaseModel ) :
     interview_type: str = "mixed"
 
 
+# ── Resume Rewriter Request Models ─────────────────────────────────────────
+
+class ResumeRewriteRequest( BaseModel ) :
+    resume_text: str
+    target_role: str = "Software Engineer"
+    tone: str = "professional"  # professional, confident, technical, concise
+
+
 # ── Progress Tracker Request Models ─────────────────────────────────────────
 
 class RoadmapImportRequest( BaseModel ) :
@@ -188,7 +200,8 @@ def get_config () :
     return ConfigResponse(
         serpapi_key_present=bool( settings.SERPAPI_KEY ),
         searchapi_key_present=bool( settings.SERPAPI_KEY ),
-        anthropic_key_present=bool( settings.GROQ_API_KEY ),  # reuse field for Groq
+        anthropic_key_present=bool( settings.GROQ_API_KEY ),  # kept for backward compat
+        groq_key_present=bool( settings.GROQ_API_KEY ),
         vector_db_initialized=True,
         total_indexed_jobs=vector_store.collection.count()
     )
@@ -698,6 +711,32 @@ def evaluate_answer ( request: EvaluateAnswerRequest ) :
 
 
 # ============================================================================
+# RESUME REWRITER
+# ============================================================================
+
+@app.post( "/resume/rewrite" )
+def rewrite_resume ( request: ResumeRewriteRequest ) :
+    """
+    Rewrite a resume to be ATS-optimized, impact-driven, and professional.
+    Returns rewritten resume text, before/after comparisons, and changes summary.
+    """
+    if not request.resume_text.strip() :
+        raise HTTPException( status_code=400, detail="resume_text is required" )
+    if not request.target_role.strip() :
+        raise HTTPException( status_code=400, detail="target_role is required" )
+    try :
+        result = resume_rewriter.rewrite(
+            resume_text=request.resume_text,
+            target_role=request.target_role,
+            tone=request.tone
+        )
+        return {"status" : "success", "result" : result}
+    except Exception as e :
+        logger.error( f"Resume rewrite error: {e}", exc_info=True )
+        raise HTTPException( status_code=500, detail=str( e ) )
+
+
+# ============================================================================
 # PROGRESS STORE (Legacy - keeping for backward compatibility)
 # ============================================================================
 
@@ -791,6 +830,34 @@ def list_tn_skills () :
 
 
 # ============================================================================
+# ATS RESUME SCORER
+# ============================================================================
+
+class ATSScoreRequest( BaseModel ) :
+    resume_text: str
+    target_role: Optional[str] = None
+
+
+@app.post( "/ats/score" )
+def score_resume ( request: ATSScoreRequest ) :
+    """
+    Score a resume against a target role using ATS rules + Groq AI.
+    Returns overall score, section breakdown, keyword gaps, and suggestions.
+    """
+    if not request.resume_text.strip() :
+        raise HTTPException( status_code=400, detail="resume_text is required" )
+    try :
+        result = ats_scorer.score_resume(
+            resume_text=request.resume_text,
+            target_role=request.target_role or "Software Engineer"
+        )
+        return {"status" : "success", "result" : result}
+    except Exception as e :
+        logger.error( f"ATS scoring error: {e}", exc_info=True )
+        raise HTTPException( status_code=500, detail=str( e ) )
+
+
+# ============================================================================
 # STATS & HEALTH
 # ============================================================================
 
@@ -816,6 +883,7 @@ def health_check () :
             "market_insights" : "ok" if settings.GROQ_API_KEY else "missing_api_key",
             "interview_coach" : "ok" if settings.GROQ_API_KEY else "missing_api_key",
             "progress_tracker" : "ok",
+            "resume_rewriter" : "ok" if resume_rewriter else "not_initialized",
             "tn_automotive_taxonomy" : f"ok — {len( tn_extractor.skill_db )} skills",
         }
     }
@@ -843,7 +911,7 @@ def _build_nsqf_summary ( extracted_skills: List[Dict] ) -> Dict :
 @app.on_event( "startup" )
 async def startup_event () :
     logger.info( "=" * 60 )
-    logger.info( "Career Genie – TN AUTO SkillBridge v3.0 (Groq-powered)" )
+    logger.info( "Career Genie – TN AUTO SkillBridge v4.0 (Groq-powered)" )
     logger.info( "=" * 60 )
     Path( settings.CHROMA_PERSIST_DIR ).mkdir( parents=True, exist_ok=True )
     for err in settings.validate() :
@@ -857,9 +925,171 @@ async def startup_event () :
     logger.info(
         f"✅ Vector store: {stats['total_jobs']} jobs indexed · freshness: {stats.get( 'freshness', 'unknown' )}" )
 
-    logger.info( f"✅ New features: Job Coach · Market Insights · Interview Coach · Progress Tracker" )
+    logger.info( f"✅ New features: Resume Rewriter · Job Coach · Market Insights · Interview Coach · Progress Tracker" )
     logger.info( "=" * 60 )
 
+
+# ============================================================================
+# MENTOR ENDPOINTS
+# ============================================================================
+
+@app.get( "/mentors/search" )
+def search_mentors (
+        expertise: Optional[str] = None,
+        industry: Optional[str] = None,
+        language: Optional[str] = None,
+        max_rate: Optional[float] = None,
+        min_rating: float = 4.0,
+        country: Optional[str] = None,
+        available_now: bool = False
+) :
+    """
+    Search for mentors with filters
+    """
+    try :
+        expertise_list = expertise.split( "," ) if expertise else None
+        mentors = get_mentor_service().search_mentors(
+            expertise=expertise_list,
+            industry=industry,
+            language=language,
+            max_rate=max_rate,
+            min_rating=min_rating,
+            country=country,
+            available_now=available_now
+        )
+        return {
+            "status" : "success",
+            "count" : len( mentors ),
+            "mentors" : mentors
+        }
+    except Exception as e :
+        logger.error( f"Mentor search error: {e}" )
+        raise HTTPException( status_code=500, detail=str( e ) )
+
+
+@app.post( "/mentors/search" )
+def search_mentors_post ( request: MentorSearchRequest ) :
+    """
+    Search for mentors with filters (POST version for complex queries)
+    """
+    try :
+        mentors = get_mentor_service().search_mentors(
+            expertise=request.expertise,
+            industry=request.industry,
+            language=request.language,
+            max_rate=request.max_rate,
+            min_rating=request.min_rating,
+            country=request.country,
+            available_now=request.available_now
+        )
+        return {
+            "status" : "success",
+            "count" : len( mentors ),
+            "mentors" : mentors
+        }
+    except Exception as e :
+        logger.error( f"Mentor search error: {e}" )
+        raise HTTPException( status_code=500, detail=str( e ) )
+
+
+@app.get( "/mentors/{mentor_id}" )
+def get_mentor ( mentor_id: str ) :
+    """Get detailed mentor profile"""
+    mentor = get_mentor_service().get_mentor_by_id( mentor_id )
+    if not mentor :
+        raise HTTPException( status_code=404, detail="Mentor not found" )
+
+    # Add reviews
+    reviews = get_mentor_service().get_mentor_reviews( mentor_id )
+    mentor_with_reviews = {**mentor, "reviews" : reviews}
+
+    return {"status" : "success", "mentor" : mentor_with_reviews}
+
+
+@app.get( "/mentors/{mentor_id}/slots" )
+def get_mentor_slots ( mentor_id: str, date: str ) :
+    """Get available time slots for a mentor on a specific date"""
+    slots = get_mentor_service().get_available_slots( mentor_id, date )
+    return {"status" : "success", "date" : date, "available_slots" : slots}
+
+
+@app.post( "/mentors/book" )
+def book_session ( request: BookSessionRequest ) :
+    """Book a mentoring session"""
+    try :
+        session = get_mentor_service().book_session(
+            user_id=request.user_id,
+            mentor_id=request.mentor_id,
+            session_date=request.session_date,
+            session_time=request.session_time,
+            duration_hours=request.duration_hours,
+            topic=request.topic,
+            notes=request.notes
+        )
+
+        if "error" in session :
+            raise HTTPException( status_code=400, detail=session["error"] )
+
+        return {"status" : "success", "session" : session}
+    except HTTPException :
+        raise
+    except Exception as e :
+        logger.error( f"Booking error: {e}" )
+        raise HTTPException( status_code=500, detail=str( e ) )
+
+
+@app.get( "/mentors/sessions/{user_id}" )
+def get_user_sessions ( user_id: str ) :
+    """Get all sessions for a user"""
+    sessions = get_mentor_service().get_user_sessions( user_id )
+    return {"status" : "success", "count" : len( sessions ), "sessions" : sessions}
+
+
+@app.post( "/mentors/sessions/{session_id}/cancel" )
+def cancel_session ( session_id: str, user_id: str ) :
+    """Cancel a session"""
+    result = get_mentor_service().cancel_session( session_id, user_id )
+
+    if "error" in result :
+        raise HTTPException( status_code=400, detail=result["error"] )
+
+    return {"status" : "success", "session" : result["session"]}
+
+
+@app.post( "/mentors/sessions/feedback" )
+def session_feedback ( request: SessionFeedbackRequest ) :
+    """Leave feedback for a completed session"""
+    result = get_mentor_service().complete_session(
+        session_id=request.session_id,
+        user_id=request.user_id,
+        rating=request.rating,
+        feedback=request.feedback
+    )
+
+    if "error" in result :
+        raise HTTPException( status_code=400, detail=result["error"] )
+
+    return {"status" : "success", "session" : result["session"]}
+
+
+@app.get( "/mentors/industries" )
+def get_industries () :
+    """Get all available industries"""
+    service = get_mentor_service()
+    industries = set()
+    for mentor in service.mentors :
+        industries.update( mentor['industries'] )
+    return {"status" : "success", "industries" : sorted( list( industries ) )}
+
+
+@app.get( "/mentors/languages" )
+def get_languages () :
+    """Get all available languages"""
+    service = get_mentor_service()
+    languages = set()
+    for mentor in service.mentors :
+        languages.update( mentor['languages_spoken'] )
+    return {"status" : "success", "languages" : sorted( list( languages ) )}
 
 if __name__ == "__main__" :
     import uvicorn

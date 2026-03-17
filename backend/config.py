@@ -30,9 +30,9 @@ class Settings:
 
     # ── Token Limits ──────────────────────────────────────────────────────────
     MAX_TOKENS_CAREER_ADVICE = 2000
-    MAX_TOKENS_ROADMAP = 3000
-    MAX_TOKENS_CHAT = 1024       # job coach / interview coach responses
-    MAX_TOKENS_INSIGHTS = 1500   # market insights
+    MAX_TOKENS_ROADMAP = 6000       # increased: 70b model needs room for full JSON roadmap
+    MAX_TOKENS_CHAT = 1024          # job coach / interview coach responses
+    MAX_TOKENS_INSIGHTS = 1500      # market insights
 
     # ── Tech Skills for Career Advisor ───────────────────────────────────────
     TECH_SKILLS = [

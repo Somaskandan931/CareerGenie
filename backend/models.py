@@ -94,6 +94,7 @@ class ConfigResponse( BaseModel ) :
     serpapi_key_present: bool
     searchapi_key_present: bool
     anthropic_key_present: bool
+    groq_key_present: bool = False
     vector_db_initialized: bool
     total_indexed_jobs: int
 
@@ -250,3 +251,33 @@ class InterviewOutcomeUpdate(BaseModel):
     final_outcome: str                         # "offer" | "rejected" | "withdrawn"
     offer_details: Optional[Dict] = None       # salary, joining date, etc.
     notes: Optional[str] = None
+
+# ============================================================================
+# MENTOR MODELS
+# ============================================================================
+
+class MentorSearchRequest(BaseModel):
+    expertise: Optional[List[str]] = None
+    industry: Optional[str] = None
+    language: Optional[str] = None
+    max_rate: Optional[float] = None
+    min_rating: float = 4.0
+    country: Optional[str] = None
+    available_now: bool = False
+
+
+class BookSessionRequest(BaseModel):
+    user_id: str
+    mentor_id: str
+    session_date: str  # YYYY-MM-DD
+    session_time: str  # HH:MM
+    duration_hours: int = 1
+    topic: str = ""
+    notes: str = ""
+
+
+class SessionFeedbackRequest(BaseModel):
+    user_id: str
+    session_id: str
+    rating: int = Field(ge=1, le=5)
+    feedback: str = ""

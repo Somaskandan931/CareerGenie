@@ -10,6 +10,9 @@ import JobCoachChat from './components/JobCoachChat';
 import MarketInsights from './components/MarketInsights';
 import InterviewCoach from './components/InterviewCoach';
 import ProgressDashboard from './components/ProgressDashboard';
+import ATSScorer from './components/ATSScorer';
+import ResumeRewriter from './components/ResumeRewriter';
+import MentorSearch from './components/MentorSearch'; // Add this import
 
 export const DarkModeContext = createContext({ dark: false, toggle: () => {} });
 
@@ -30,6 +33,7 @@ const icons = {
   coach:       "M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z",
   insights:    "M13 7h8m0 0v8m0-8l-8 8-4-4-6 6",
   institution: "M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4",
+  ats:         "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4",
   upload:      "M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12",
   check:       "M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z",
   alert:       "M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z",
@@ -38,6 +42,8 @@ const icons = {
   book:        "M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253",
   ext:         "M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14",
   map:         "M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7",
+  globe:       "M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z",
+  pen:         "M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z",
 };
 
 // ─── Career Advice ────────────────────────────────────────────────────────────
@@ -138,7 +144,7 @@ const LearningPathTab = ({ resumeText, careerAdvice }) => {
 
   const parseGaps = () => skillGaps.split(",").map(s => s.trim()).filter(Boolean);
 
-  const genRoadmap = async () => {
+  const genRoadmap = async (retryCount = 0) => {
     if (!targetRole.trim()) { setError("Enter a target role."); return; }
     setError(null); setLoadingRoadmap(true); setRoadmap(null);
     try {
@@ -147,9 +153,23 @@ const LearningPathTab = ({ resumeText, careerAdvice }) => {
         body: JSON.stringify({ resume_text: resumeText || "", target_role: targetRole.trim(), skill_gaps: parseGaps(), duration_weeks: durationWeeks, experience_level: experienceLevel || null }),
       });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`);
-      setRoadmap((await res.json()).roadmap);
-    } catch (e) { setError(e.message); }
-    finally { setLoadingRoadmap(false); }
+      const data = await res.json();
+      if (!data.roadmap) {
+        if (retryCount < 2) {
+          setError(`Roadmap generation returned empty data — retrying (${retryCount + 1}/2)…`);
+          setLoadingRoadmap(false);
+          setTimeout(() => genRoadmap(retryCount + 1), 1500);
+          return;
+        }
+        throw new Error("Roadmap generation failed after retries. The AI model may be overloaded — please try again in a moment.");
+      }
+      setRoadmap(data.roadmap);
+      setError(null);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoadingRoadmap(false);
+    }
   };
 
   const genProjects = async () => {
@@ -239,11 +259,11 @@ const LearningPathTab = ({ resumeText, careerAdvice }) => {
           </div>
         </div>
         <div className="flex flex-wrap gap-2.5 pt-4 border-t border-gray-100 dark:border-gray-700">
-          <button onClick={() => { genRoadmap(); genProjects(); }} disabled={loadingRoadmap || loadingProjects || !targetRole.trim()}
+          <button onClick={() => { genRoadmap(0); genProjects(); }} disabled={loadingRoadmap || loadingProjects || !targetRole.trim()}
             className="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-5 py-2.5 rounded-lg disabled:opacity-40 transition-colors flex items-center gap-2">
             {(loadingRoadmap || loadingProjects) ? <><div className="animate-spin rounded-full h-3.5 w-3.5 border-b-2 border-white" />Generating...</> : "Generate Roadmap + Projects"}
           </button>
-          <button onClick={genRoadmap} disabled={loadingRoadmap || !targetRole.trim()}
+          <button onClick={() => genRoadmap(0)} disabled={loadingRoadmap || !targetRole.trim()}
             className="text-sm text-indigo-700 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-600 px-4 py-2.5 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-900/20 disabled:opacity-40 transition-colors">
             {loadingRoadmap ? "..." : "Roadmap only"}
           </button>
@@ -312,14 +332,31 @@ export default function App() {
     { key: "progress",  label: "Progress",       icon: icons.progress },
     { key: "learning",  label: "Learning",       icon: icons.learning, badge: careerAdvice?.skill_gaps?.length > 0 ? careerAdvice.skill_gaps.length : null },
     { key: "interview", label: "Interview Prep", icon: icons.interview },
+    { key: "ats",       label: "ATS Scorer",     icon: icons.ats },
+    { key: "rewriter",  label: "Resume Rewriter", icon: icons.pen },
   ];
+
   const NAV_AI = [
     { key: "coach",       label: "Job Coach",       icon: icons.coach },
+    { key: "mentors",     label: "Expert Mentors",  icon: icons.globe },
     { key: "insights",    label: "Market Insights", icon: icons.insights },
     { key: "institution", label: "Institution",     icon: icons.institution },
   ];
-  const PAGE_TITLES = { jobs: "Job Matches", progress: "Progress Dashboard", learning: "Learning Path", interview: "Interview Coach", coach: "Job Coach", insights: "Market Insights", institution: "Institution Analytics" };
-  const showResume = !["institution", "progress"].includes(activeTab);
+
+  const PAGE_TITLES = {
+    jobs: "Job Matches",
+    progress: "Progress Dashboard",
+    learning: "Learning Path",
+    interview: "Interview Coach",
+    ats: "ATS Resume Scorer",
+    rewriter: "Resume Rewriter",
+    coach: "Job Coach",
+    mentors: "Expert Mentors",
+    insights: "Market Insights",
+    institution: "Institution Analytics"
+  };
+
+  const showResume = !["institution", "progress", "mentors"].includes(activeTab);
 
   const NavItem = ({ item }) => (
     <button onClick={() => setActiveTab(item.key)}
@@ -381,8 +418,10 @@ export default function App() {
         <header className="h-12 flex-shrink-0 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-6">
           <h1 className="text-sm font-medium text-gray-900 dark:text-white">{PAGE_TITLES[activeTab]}</h1>
           <div className="flex items-center gap-2">
-            {backendConfig && (!backendConfig.serpapi_key_present || !backendConfig.anthropic_key_present) && (
-              <span className="text-xs text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 px-2 py-1 rounded-md">API keys missing</span>
+            {backendConfig && (!backendConfig.serpapi_key_present || !backendConfig.groq_key_present) && (
+              <span className="text-xs text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 px-2 py-1 rounded-md">
+                {!backendConfig.groq_key_present ? "Groq API key missing" : "SerpAPI key missing"}
+              </span>
             )}
             <button onClick={() => setDark(d => !d)}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600 transition-all">
@@ -470,15 +509,22 @@ export default function App() {
                 <JobCoachChat resumeText={resumeText} />
               </div>
             )}
+            {activeTab === "mentors"     && (
+              <div className="space-y-4">
+                <MentorSearch userId={USER_ID} userSkills={resumeSkills} />
+              </div>
+            )}
             {activeTab === "insights"    && <MarketInsights resumeSkills={resumeSkills} />}
             {activeTab === "interview"   && <InterviewCoach resumeText={resumeText} />}
+            {activeTab === "ats"         && <ATSScorer resumeText={resumeText} />}
+            {activeTab === "rewriter"    && <ResumeRewriter resumeText={resumeText} />}
             {activeTab === "institution" && <TNAnalyticsDashboard />}
 
           </div>
         </main>
 
         <footer className="h-8 flex-shrink-0 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 flex items-center justify-center">
-          <p className="text-xs text-gray-400 dark:text-gray-500">Career Genie v4.0 · Groq · RAG · ChromaDB · Naan Mudhalvan · TNSDC · NSQF</p>
+          <p className="text-xs text-gray-400 dark:text-gray-500">Career Genie v4.0 · Groq · RAG · ChromaDB · Naan Mudhalvan · TNSDC · NSQF · Expert Mentors · ATS Scorer · Resume Rewriter</p>
         </footer>
       </div>
     </div>

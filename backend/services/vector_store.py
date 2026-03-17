@@ -3,8 +3,16 @@ from chromadb.config import Settings as ChromaSettings
 from sentence_transformers import SentenceTransformer
 from typing import List, Dict
 import logging
+import os
 from pathlib import Path
 from datetime import datetime
+
+# Disable ChromaDB telemetry before any client is created.
+# The posthog version bundled with newer chromadb has a signature mismatch
+# (capture() takes 1 positional argument but 3 were given) — suppressing
+# telemetry at the env level is the only reliable fix.
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
+os.environ.setdefault("CHROMA_TELEMETRY", "False")
 
 from backend.config import settings
 
@@ -25,7 +33,8 @@ class VectorStore :
             path=str( persist_dir ),
             settings=ChromaSettings(
                 anonymized_telemetry=False,
-                allow_reset=True
+                allow_reset=True,
+                is_persistent=True,
             )
         )
 

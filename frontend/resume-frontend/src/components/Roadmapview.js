@@ -38,6 +38,12 @@ const LinkIcon = () => (
   </svg>
 );
 
+const ExternalLinkIcon = () => (
+  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+  </svg>
+);
+
 // ─── Resource type badge ───────────────────────────────────────────────────────
 
 const RESOURCE_COLORS = {
@@ -46,11 +52,13 @@ const RESOURCE_COLORS = {
   docs: "bg-sky-100 text-sky-700 border-sky-200",
   video: "bg-red-100 text-red-700 border-red-200",
   practice: "bg-emerald-100 text-emerald-700 border-emerald-200",
+  github: "bg-gray-100 text-gray-700 border-gray-200",
+  tutorial: "bg-blue-100 text-blue-700 border-blue-200",
 };
 
 const ResourceBadge = ({ type }) => (
-  <span className={`text-xs px-2 py-0.5 rounded-full border font-medium capitalize ${RESOURCE_COLORS[type] || "bg-gray-100 text-gray-600 border-gray-200"}`}>
-    {type}
+  <span className={`text-xs px-2 py-0.5 rounded-full border font-medium capitalize ${RESOURCE_COLORS[type?.toLowerCase()] || "bg-gray-100 text-gray-600 border-gray-200"}`}>
+    {type || "resource"}
   </span>
 );
 
@@ -58,6 +66,15 @@ const ResourceBadge = ({ type }) => (
 
 const WeekCard = ({ task, completed, onToggle }) => {
   const [open, setOpen] = useState(false);
+
+  const isValidUrl = (string) => {
+    try {
+      new URL(string);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  };
 
   return (
     <div className={`rounded-xl border-2 transition-all duration-200 ${completed ? "border-green-300 bg-green-50" : "border-gray-200 bg-white hover:border-indigo-300"}`}>
@@ -104,23 +121,36 @@ const WeekCard = ({ task, completed, onToggle }) => {
               <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2 flex items-center gap-1">
                 <BookIcon /> Resources
               </p>
-              <div className="space-y-2 dark:text-gray-300">
-                {task.resources.map((r, i) => (
-                  <div key={i} className="flex items-center gap-2 flex-wrap">
-                    <ResourceBadge type={r.type} />
-                    {r.url ? (
-                      <a href={r.url} target="_blank" rel="noopener noreferrer"
-                        className="text-sm text-indigo-600 hover:underline flex items-center gap-1">
-                        {r.title} <LinkIcon />
-                      </a>
-                    ) : (
-                      <span className="text-sm text-gray-700 dark:text-gray-300">{r.title}</span>
-                    )}
-                    {r.duration && (
-                      <span className="text-xs text-gray-400">· {r.duration}</span>
-                    )}
-                  </div>
-                ))}
+              <div className="space-y-3 dark:text-gray-300">
+                {task.resources.map((r, i) => {
+                  const hasValidUrl = r.url && isValidUrl(r.url);
+                  return (
+                    <div key={i} className="flex flex-wrap items-center gap-2 p-2 bg-gray-50 dark:bg-gray-800 rounded-lg">
+                      <ResourceBadge type={r.type} />
+                      {hasValidUrl ? (
+                        <a
+                          href={r.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-sm text-indigo-600 hover:underline flex items-center gap-1 flex-1"
+                        >
+                          {r.title}
+                          <ExternalLinkIcon />
+                        </a>
+                      ) : (
+                        <span className="text-sm text-gray-700 dark:text-gray-300 flex-1">
+                          {r.title}
+                          {!r.url && <span className="ml-2 text-xs text-gray-400">(Search on Coursera/Udemy)</span>}
+                        </span>
+                      )}
+                      {r.duration && (
+                        <span className="text-xs text-gray-400 bg-white dark:bg-gray-700 px-2 py-1 rounded-full">
+                          {r.duration}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -243,6 +273,22 @@ const RoadmapView = ({ roadmap, loading = false }) => {
         <div className="text-5xl mb-4">🗺️</div>
         <h3 className="text-xl font-bold text-gray-800 mb-2">No Roadmap Yet</h3>
         <p className="text-gray-500 text-sm">Match with a job and click "Generate Roadmap" to get your personalized learning plan.</p>
+      </div>
+    );
+  }
+
+  // ── Corrupt / incomplete data guard ──
+  const isValid = roadmap.title && Array.isArray(roadmap.phases) && roadmap.phases.length > 0;
+
+  if (!isValid) {
+    return (
+      <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-10 text-center border-2 border-amber-200 dark:border-amber-700">
+        <div className="text-4xl mb-4">⚠️</div>
+        <h3 className="text-lg font-bold text-amber-800 dark:text-amber-300 mb-2">Roadmap data is incomplete</h3>
+        <p className="text-sm text-gray-500 dark:text-gray-400">
+          The AI returned an incomplete response. This can happen when the model is under load.
+          Please try generating the roadmap again.
+        </p>
       </div>
     );
   }

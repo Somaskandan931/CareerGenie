@@ -3,83 +3,73 @@ from serpapi import GoogleSearch
 import logging
 from datetime import datetime
 import re
+import time
+import hashlib
 
 from backend.config import settings
 
 logger = logging.getLogger( __name__ )
+
+# Simple cache to prevent duplicate requests
+_search_cache = {}
+_cache_ttl = 300  # 5 minutes
 
 
 class JobScraper :
     def __init__ ( self ) :
         if not settings.SERPAPI_KEY :
             raise ValueError( "SERPAPI_KEY not configured" )
-
         self.api_key = settings.SERPAPI_KEY
+
+    def _get_cache_key ( self, query: str, location: str, days_old: int ) -> str :
+        """Generate cache key for search query"""
+        raw = f"{query}|{location}|{days_old}"
+        return hashlib.md5( raw.encode() ).hexdigest()
 
     def fetch_jobs ( self, query: str, location: str, num_jobs: int = 50,
                      days_old: int = 7 ) -> List[Dict] :
         """
         Fetch jobs from Google Jobs via SerpAPI with freshness control
-
-        Args:
-            query: Job search query (e.g., "software engineer")
-            location: Location (e.g., "India", "Bangalore")
-            num_jobs: Number of jobs to fetch
-            days_old: Maximum age of jobs in days
-
-        Returns:
-            List of job dictionaries with freshness metadata
         """
-        logger.info( f"Fetching fresh jobs: query='{query}', location='{location}', max_days={days_old}" )
+        # Check cache first
+        cache_key = self._get_cache_key( query, location, days_old )
+        if cache_key in _search_cache :
+            cached_time, cached_jobs = _search_cache[cache_key]
+            if time.time() - cached_time < _cache_ttl :
+                logger.info( f"Returning cached jobs for {query} in {location}" )
+                return cached_jobs
 
-        # Add date filter to query
-        date_filter = ""
-        if days_old <= 1 :
-            date_filter = "&fromage=1"
-        elif days_old <= 3 :
-            date_filter = "&fromage=3"
-        elif days_old <= 7 :
-            date_filter = "&fromage=7"
-        elif days_old <= 14 :
-            date_filter = "&fromage=14"
-        elif days_old <= 30 :
-            date_filter = "&fromage=30"
+        logger.info( f"Fetching fresh jobs: query='{query}', location='{location}', max_days={days_old}" )
 
         params = {
             "engine" : "google_jobs",
             "q" : f"{query} jobs",
-            "location" : location,  # e.g., Bengaluru, Chennai, Remote
-            "gl" : "in",  # Country = India (CRITICAL)
-            "hl" : "en",  # Language = English
-            "num" : min( num_jobs, 100 ),  # API limit
+            "location" : location,
+            "gl" : "in",
+            "hl" : "en",
+            "num" : min( num_jobs, 100 ),
             "api_key" : self.api_key,
-            "chips" : f"date_posted:{self._get_date_chip( days_old )}" if days_old < 30 else ""
         }
 
         try :
             search = GoogleSearch( params )
             results = search.get_dict()
-
             jobs_results = results.get( "jobs_results", [] )
             logger.info( f"Found {len( jobs_results )} jobs" )
 
             jobs = []
             for idx, job in enumerate( jobs_results[:num_jobs] ) :
-                # Safely extract fields first
                 title = job.get( "title", "Unknown Title" )
                 company = job.get( "company_name", "Unknown Company" )
 
-                # Calculate days old from posted_at
                 posted_at = job.get( "detected_extensions", {} ).get( "posted_at", "" )
                 days_old_calc = self._calculate_days_old( posted_at )
 
-                # Skip if older than requested
                 if days_old_calc > days_old :
                     continue
 
                 job_data = {
-                    "id" : f"job_{idx}_{abs( hash( title + company + datetime.now().isoformat() ) )}",
-                    # Unique with timestamp
+                    "id" : f"job_{int( time.time() )}_{idx}_{abs( hash( title + company ) )}",
                     "title" : title,
                     "company" : company,
                     "location" : job.get( "location", location ),
@@ -90,8 +80,13 @@ class JobScraper :
                     "days_old" : days_old_calc,
                     "fetched_at" : datetime.now().isoformat(),
                 }
-
                 jobs.append( job_data )
+
+            # Cache results
+            _search_cache[cache_key] = (time.time(), jobs)
+
+            # Clean old cache entries
+            self._clean_cache()
 
             logger.info( f"Successfully processed {len( jobs )} fresh jobs" )
             return jobs
@@ -100,19 +95,12 @@ class JobScraper :
             logger.error( f"Error fetching jobs: {str( e )}" )
             raise Exception( f"Failed to fetch jobs: {str( e )}" )
 
-    def _get_date_chip ( self, days_old: int ) -> str :
-        """Convert days to Google Jobs date chip"""
-        if days_old <= 1 :
-            return "today"
-        elif days_old <= 3 :
-            return "3days"
-        elif days_old <= 7 :
-            return "week"
-        elif days_old <= 14 :
-            return "2weeks"
-        elif days_old <= 30 :
-            return "month"
-        return ""
+    def _clean_cache ( self ) :
+        """Remove expired cache entries"""
+        current_time = time.time()
+        expired = [k for k, (t, _) in _search_cache.items() if current_time - t > _cache_ttl]
+        for k in expired :
+            del _search_cache[k]
 
     def _calculate_days_old ( self, posted_at: str ) -> int :
         """Calculate how many days old a job posting is"""
@@ -121,37 +109,32 @@ class JobScraper :
 
         posted_lower = posted_at.lower()
 
-        # Parse relative dates
         if 'hour' in posted_lower or 'minute' in posted_lower or 'just now' in posted_lower :
             return 0
         elif 'day' in posted_lower :
             match = re.search( r'(\d+)\s*day', posted_lower )
             if match :
                 return int( match.group( 1 ) )
-            return 1  # "a day ago" or "yesterday"
+            return 1
         elif 'week' in posted_lower :
             match = re.search( r'(\d+)\s*week', posted_lower )
             if match :
                 return int( match.group( 1 ) ) * 7
-            return 7  # "a week ago"
+            return 7
         elif 'month' in posted_lower :
             match = re.search( r'(\d+)\s*month', posted_lower )
             if match :
                 return int( match.group( 1 ) ) * 30
-            return 30  # "a month ago"
-
+            return 30
         return 0
 
     def _extract_apply_link ( self, job: Dict ) -> str :
         """Extract application link from job data"""
-        # Try related links first
         related_links = job.get( "related_links", [] )
         if related_links and isinstance( related_links, list ) :
             for link in related_links :
                 if link.get( "link", "" ) :
                     return link.get( "link", "" )
-
-        # Fallback to share link
         return job.get( "share_link", "" )
 
 
