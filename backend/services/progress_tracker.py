@@ -34,8 +34,8 @@ def _load(user_id: str) -> Dict:
     if path.exists():
         try:
             return json.loads(path.read_text())
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Error loading progress for {user_id}: {e}")
     return _empty_state(user_id)
 
 
@@ -49,11 +49,12 @@ def _empty_state(user_id: str) -> Dict:
         "user_id": user_id,
         "created_at": datetime.utcnow().isoformat(),
         "updated_at": datetime.utcnow().isoformat(),
-        "roadmap": {},          # week tasks
-        "projects": [],         # portfolio projects
-        "dsa": {},              # topic → {solved, total, problems[]}
-        "interviews": [],       # interview pipeline entries
-        "activity_log": [],     # GitHub-style contribution log {date, count, type}
+        "roadmap": {},
+        "roadmap_metadata": {},
+        "projects": [],
+        "dsa": {},
+        "interviews": [],
+        "activity_log": [],
     }
 
 
@@ -163,6 +164,7 @@ class ProgressTracker:
                 "completed_tasks": done_tasks,
                 "pct": round(done_tasks / total_tasks * 100, 1) if total_tasks else 0,
                 "weeks_count": len(weeks),
+                "metadata": state.get("roadmap_metadata", {})
             },
             "projects": {
                 "total": len(projects),
@@ -191,38 +193,169 @@ class ProgressTracker:
     # ── ROADMAP ────────────────────────────────────────────────────────────────
 
     def import_roadmap(self, user_id: str, roadmap: Dict) -> Dict:
-        """Import a generated roadmap into the tracker."""
+        """Import a generated roadmap into the tracker with proper structure"""
         state = _load(user_id)
+
+        # Validate roadmap structure
+        if not roadmap:
+            return {"error": "Invalid roadmap format - empty", "imported": 0}
+
+        if 'phases' not in roadmap:
+            return {"error": "Invalid roadmap format - missing phases", "imported": 0}
+
         weeks: Dict[str, List] = {}
-        for phase in roadmap.get("phases", []):
-            for wt in phase.get("weekly_tasks", []):
-                week_key = f"Week {wt['week']}"
-                weeks.setdefault(week_key, []).append({
+        total_tasks = 0
+
+        for phase in roadmap.get('phases', []):
+            phase_title = phase.get('phase_title', 'Untitled Phase')
+            phase_number = phase.get('phase_number', 1)
+
+            for wt in phase.get('weekly_tasks', []):
+                week_num = wt.get('week', 1)
+                week_key = f"Week {week_num}"
+
+                # Extract skills from resources or create from topic
+                skills_covered = []
+                for resource in wt.get('resources', []):
+                    if isinstance(resource, dict) and 'skills' in resource:
+                        skills_covered.extend(resource['skills'])
+
+                # Create task with all necessary fields
+                task = {
                     "id": str(uuid.uuid4()),
-                    "topic": wt.get("topic", ""),
-                    "description": wt.get("description", ""),
-                    "milestone": wt.get("milestone", ""),
-                    "hours": wt.get("hours_per_week", 0),
-                    "phase": phase.get("phase_title", ""),
+                    "topic": wt.get('topic', 'General'),
+                    "description": wt.get('description', ''),
+                    "milestone": wt.get('milestone', ''),
+                    "hours": wt.get('hours_per_week', 8),
+                    "phase": phase_title,
+                    "phase_number": phase_number,
+                    "week_number": week_num,
                     "done": False,
                     "done_at": None,
-                    "resources": wt.get("resources", []),
-                })
+                    "resources": wt.get('resources', []),
+                    "skills_covered": skills_covered or [wt.get('topic', '')],
+                }
+
+                weeks.setdefault(week_key, []).append(task)
+                total_tasks += 1
+
+        # Store with metadata
         state["roadmap"] = weeks
+        state["roadmap_metadata"] = {
+            "title": roadmap.get('title', 'Learning Roadmap'),
+            "target_role": roadmap.get('target_role', ''),
+            "duration_weeks": roadmap.get('duration_weeks', 12),
+            "imported_at": datetime.utcnow().isoformat(),
+            "total_tasks": total_tasks,
+            "completed_tasks": 0,
+            "summary": roadmap.get('summary', ''),
+            "final_milestone": roadmap.get('final_milestone', ''),
+            "tips": roadmap.get('tips', [])
+        }
+
         _save(user_id, state)
-        return {"imported_weeks": len(weeks), "total_tasks": sum(len(v) for v in weeks.values())}
+
+        # Log activity
+        _log_activity(state, "roadmap_imported", total_tasks)
+
+        return {
+            "imported": True,
+            "weeks": len(weeks),
+            "total_tasks": total_tasks,
+            "metadata": state["roadmap_metadata"]
+        }
+
+    def get_roadmap_with_progress(self, user_id: str) -> Dict:
+        """Get roadmap with progress tracking data"""
+        state = _load(user_id)
+
+        roadmap = state.get("roadmap", {})
+        metadata = state.get("roadmap_metadata", {})
+
+        # Calculate progress
+        total_tasks = metadata.get("total_tasks", 0)
+        completed_tasks = 0
+
+        enriched_weeks = {}
+        for week_key, tasks in roadmap.items():
+            week_tasks = []
+            week_completed = 0
+            week_hours = 0
+
+            for task in tasks:
+                task_completed = task.get("done", False)
+                if task_completed:
+                    week_completed += 1
+                    completed_tasks += 1
+
+                week_hours += task.get("hours", 8)
+
+                week_tasks.append({
+                    **task,
+                    "progress": "completed" if task_completed else "pending"
+                })
+
+            enriched_weeks[week_key] = {
+                "tasks": week_tasks,
+                "progress": {
+                    "completed": week_completed,
+                    "total": len(tasks),
+                    "percentage": round(week_completed / len(tasks) * 100, 1) if tasks else 0,
+                    "total_hours": week_hours,
+                    "completed_hours": week_hours if week_completed == len(tasks) else 0
+                }
+            }
+
+        # Calculate phase-wise progress
+        phases_progress = {}
+        for week_key, week_data in enriched_weeks.items():
+            for task in week_data["tasks"]:
+                phase = task.get("phase", "Unknown")
+                if phase not in phases_progress:
+                    phases_progress[phase] = {"total": 0, "completed": 0}
+                phases_progress[phase]["total"] += 1
+                if task.get("done"):
+                    phases_progress[phase]["completed"] += 1
+
+        # Add percentages to phases
+        for phase, data in phases_progress.items():
+            data["percentage"] = round(data["completed"] / data["total"] * 100, 1) if data["total"] else 0
+
+        return {
+            "metadata": {
+                **metadata,
+                "overall_progress": {
+                    "completed": completed_tasks,
+                    "total": total_tasks,
+                    "percentage": round(completed_tasks / total_tasks * 100, 1) if total_tasks else 0
+                },
+                "phases_progress": phases_progress
+            },
+            "weeks": enriched_weeks
+        }
 
     def update_task(self, user_id: str, week_key: str, task_id: str, done: bool) -> Dict:
         state = _load(user_id)
         weeks = state.get("roadmap", {})
+
         for task in weeks.get(week_key, []):
             if task["id"] == task_id:
                 task["done"] = done
                 task["done_at"] = datetime.utcnow().isoformat() if done else None
+
+                # Update metadata completed count
+                metadata = state.get("roadmap_metadata", {})
+                if done:
+                    metadata["completed_tasks"] = metadata.get("completed_tasks", 0) + 1
+                else:
+                    metadata["completed_tasks"] = max(0, metadata.get("completed_tasks", 0) - 1)
+
                 if done:
                     _log_activity(state, "roadmap")
+
                 _save(user_id, state)
-                return {"updated": True}
+                return {"updated": True, "task": task}
+
         return {"updated": False, "error": "Task not found"}
 
     # ── PROJECTS ───────────────────────────────────────────────────────────────
