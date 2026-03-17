@@ -1,4 +1,4 @@
-from anthropic import Anthropic
+from groq import Groq
 from typing import List, Dict, Optional
 import logging
 import re
@@ -9,51 +9,21 @@ logger = logging.getLogger(__name__)
 
 
 class CareerAdvisor:
-    """Provides comprehensive career guidance, learning paths, and progression advice"""
-
     def __init__(self):
-        """Initialize Anthropic client"""
-        if not settings.ANTHROPIC_API_KEY:
-            raise ValueError("ANTHROPIC_API_KEY not configured")
+        if not settings.GROQ_API_KEY:
+            raise ValueError("GROQ_API_KEY not configured")
+        self.client = Groq(api_key=settings.GROQ_API_KEY)
+        logger.info("CareerAdvisor initialized with Groq")
 
-        self.client = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-        logger.info("CareerAdvisor initialized")
-
-    def generate_career_advice(
-            self,
-            resume_text: str,
-            target_role: Optional[str] = None,
-            current_role: Optional[str] = None,
-            job_matches: Optional[List[Dict]] = None
-    ) -> Dict:
-        """Generate comprehensive career advice using RAG approach"""
-        logger.info(f"Generating career advice for target role: {target_role or 'General'}")
-
-        # Analyze current skills and gaps
+    def generate_career_advice(self, resume_text: str, target_role: Optional[str] = None,
+                                current_role: Optional[str] = None,
+                                job_matches: Optional[List[Dict]] = None) -> Dict:
         current_skills = self._extract_skills_from_resume(resume_text)
-
-        # Generate comprehensive advice using Claude
-        advice = self._generate_advice_with_claude(
-            resume_text=resume_text,
-            current_role=current_role,
-            target_role=target_role,
-            current_skills=current_skills,
-            job_matches=job_matches
-        )
-
-        # Generate learning path
-        learning_path = self._generate_learning_path(
-            current_skills=current_skills,
-            target_role=target_role,
-            skill_gaps=advice.get('skill_gaps', [])
-        )
-
-        # Generate career progression
-        career_progression = self._generate_career_progression(
-            current_role=current_role,
-            target_role=target_role
-        )
-
+        advice = self._generate_advice(resume_text, current_role, target_role,
+                                        current_skills, job_matches)
+        learning_path = self._generate_learning_path(current_skills, target_role,
+                                                      advice.get('skill_gaps', []))
+        career_progression = self._generate_career_progression(current_role, target_role)
         return {
             "current_assessment": advice.get('assessment', ''),
             "skill_gaps": advice.get('skill_gaps', []),
@@ -64,323 +34,165 @@ class CareerAdvisor:
         }
 
     def _extract_skills_from_resume(self, resume_text: str) -> List[str]:
-        """Extract skills from resume"""
         text_lower = resume_text.lower()
-        found_skills = set()
-
+        found = set()
         for skill in settings.TECH_SKILLS:
-            pattern = r'\b' + re.escape(skill.lower()) + r'\b'
-            if re.search(pattern, text_lower):
-                found_skills.add(skill)
+            if re.search(r'\b' + re.escape(skill.lower()) + r'\b', text_lower):
+                found.add(skill)
+        return sorted(list(found))
 
-        return sorted(list(found_skills))
-
-    def _generate_advice_with_claude(
-            self,
-            resume_text: str,
-            current_role: Optional[str],
-            target_role: Optional[str],
-            current_skills: List[str],
-            job_matches: Optional[List[Dict]]
-    ) -> Dict:
-        """Use Claude to generate personalized career advice"""
-
-        # Prepare context from job matches
+    def _generate_advice(self, resume_text, current_role, target_role,
+                          current_skills, job_matches) -> Dict:
         job_context = ""
         if job_matches:
-            top_matches = job_matches[:3]
             job_context = "\n".join([
-                f"- {job['title']} at {job['company']} (Match: {job.get('match_score', 0)}%)"
-                for job in top_matches
+                f"- {j['title']} at {j['company']} (Match: {j.get('match_score', 0)}%)"
+                for j in job_matches[:3]
             ])
 
-        prompt = f"""You are an expert career advisor providing personalized guidance.
+        prompt = f"""You are an expert career advisor.
 
-**Candidate's Profile:**
-Resume Summary: {resume_text[:1500]}
-Current Role: {current_role or 'Entry-level / Career change'}
+Resume: {resume_text[:1200]}
+Current Role: {current_role or 'Entry-level'}
 Target Role: {target_role or 'Software Engineer'}
-Current Skills: {', '.join(current_skills) if current_skills else 'Limited technical skills'}
+Current Skills: {', '.join(current_skills) if current_skills else 'Limited'}
+Recent Job Matches: {job_context or 'None'}
 
-**Recent Job Matches:**
-{job_context if job_context else 'No recent job matches'}
+Provide structured career advice with these exact sections:
 
-Provide comprehensive career advice in the following structure:
+1. CURRENT ASSESSMENT: 2-3 sentences evaluating market readiness and strengths.
 
-1. **Current Assessment** (2-3 sentences)
-   - Evaluate their current skill level and market readiness
-   - Highlight key strengths
+2. CRITICAL SKILL GAPS: List exactly 4 missing skills, one per line, format:
+- SkillName | Importance: Critical/Important | Current: None/Beginner | Target: Intermediate/Advanced
 
-2. **Critical Skill Gaps** (List 3-5 specific skills)
-   - Identify the most important missing skills for their target role
-   - Prioritize by market demand and career impact
+3. MARKET INSIGHTS: 2 sentences on demand, salary range, trends for target role.
 
-3. **Market Insights** (2-3 sentences)
-   - Current demand for their target role
-   - Salary expectations for their skill level
-   - Industry trends affecting their career path
+4. ACTION PLAN: 5 specific actionable steps, one per line starting with a dash.
 
-4. **Action Plan** (4-6 specific, actionable steps)
-   - Immediate actions (Week 1-2)
-   - Short-term goals (Month 1-2)
-   - Medium-term objectives (Month 3-6)
-   - Each step should be specific and measurable
-
-Be encouraging but realistic. Provide concrete, actionable advice."""
+Be direct and specific."""
 
         try:
-            response = self.client.messages.create(
-                model=settings.CLAUDE_MODEL,
+            response = self.client.chat.completions.create(
+                model=settings.GROQ_SMART_MODEL,
                 max_tokens=settings.MAX_TOKENS_CAREER_ADVICE,
                 messages=[{"role": "user", "content": prompt}]
             )
-
-            advice_text = response.content[0].text.strip()
-            parsed_advice = self._parse_claude_response(advice_text, current_skills)
-            return parsed_advice
-
+            return self._parse_response(response.choices[0].message.content.strip(),
+                                         current_skills)
         except Exception as e:
-            logger.error(f"Error generating career advice: {str(e)}")
-            return self._generate_fallback_advice(current_skills, target_role)
+            logger.error(f"Career advice error: {e}")
+            return self._fallback_advice(current_skills, target_role)
 
-    def _parse_claude_response(self, response_text: str, current_skills: List[str]) -> Dict:
-        """Parse Claude's structured response"""
-        lines = response_text.split('\n')
-
-        assessment = ""
-        skill_gaps = []
-        market_insights = ""
-        action_plan = []
-
-        current_section = None
+    def _parse_response(self, text: str, current_skills: List[str]) -> Dict:
+        lines = text.split('\n')
+        assessment, skill_gaps, market_insights, action_plan = "", [], "", []
+        section = None
 
         for line in lines:
             line = line.strip()
             if not line:
                 continue
+            ll = line.lower()
+            if "current assessment" in ll or ll.startswith("1."):
+                section = "assessment"; continue
+            elif "skill gap" in ll or "critical skill" in ll or ll.startswith("2."):
+                section = "skills"; continue
+            elif "market insight" in ll or ll.startswith("3."):
+                section = "market"; continue
+            elif "action plan" in ll or ll.startswith("4."):
+                section = "actions"; continue
 
-            # Identify sections (case-insensitive)
-            line_lower = line.lower()
-            if "current assessment" in line_lower or (line_lower.startswith("1.") and "assessment" in line_lower):
-                current_section = "assessment"
-                continue
-            elif "skill gap" in line_lower or "critical skill" in line_lower or (
-                    line_lower.startswith("2.") and "skill" in line_lower):
-                current_section = "skills"
-                continue
-            elif "market insight" in line_lower or (line_lower.startswith("3.") and "market" in line_lower):
-                current_section = "market"
-                continue
-            elif "action plan" in line_lower or (line_lower.startswith("4.") and "action" in line_lower):
-                current_section = "actions"
-                continue
+            if line.startswith(('**', '#')): continue
 
-            # Skip header markers
-            if line.startswith(('**', '#', '###')):
-                continue
-
-            # Add content to current section
-            if current_section == "assessment":
-                if not line.startswith(('-', '•', '*')) and len(line) > 10:
-                    assessment += line + " "
-            elif current_section == "skills":
-                if line.startswith(('-', '•', '*')) or (line[0].isdigit() and '.' in line[:3]):
-                    skill_text = re.sub(r'^[-•*\d.)\s]+', '', line).strip()
-                    if skill_text and len(skill_text) < 150:
-                        skill_name = skill_text.split(':')[0].split('-')[0].strip()
-                        skill_gaps.append({
-                            "skill": skill_name,
-                            "importance": "Critical",
-                            "current_level": "Beginner" if any(
-                                s.lower() in skill_name.lower() for s in current_skills) else "None",
-                            "target_level": "Intermediate"
-                        })
-            elif current_section == "market":
-                if not line.startswith(('-', '•', '*')) and len(line) > 10:
-                    market_insights += line + " "
-            elif current_section == "actions":
-                if line.startswith(('-', '•', '*')) or (line[0].isdigit() and '.' in line[:3]):
-                    action_text = re.sub(r'^[-•*\d.)\s]+', '', line).strip()
-                    if action_text and len(action_text) > 5:
-                        action_plan.append(action_text)
+            if section == "assessment" and not line.startswith('-') and len(line) > 10:
+                assessment += line + " "
+            elif section == "skills" and line.startswith('-'):
+                parts = re.sub(r'^[-•*\s]+', '', line).split('|')
+                skill_name = parts[0].strip()
+                importance = "Critical"
+                current_level = "None"
+                target_level = "Intermediate"
+                for p in parts[1:]:
+                    p = p.strip()
+                    if p.lower().startswith("importance"):
+                        importance = p.split(":")[-1].strip()
+                    elif p.lower().startswith("current"):
+                        current_level = p.split(":")[-1].strip()
+                    elif p.lower().startswith("target"):
+                        target_level = p.split(":")[-1].strip()
+                if skill_name and len(skill_name) > 2:
+                    skill_gaps.append({"skill": skill_name, "importance": importance,
+                                        "current_level": current_level, "target_level": target_level})
+            elif section == "market" and not line.startswith('-') and len(line) > 10:
+                market_insights += line + " "
+            elif section == "actions" and (line.startswith('-') or (line[0].isdigit() and '.' in line[:3])):
+                action = re.sub(r'^[-•*\d.)\s]+', '', line).strip()
+                if action and len(action) > 5:
+                    action_plan.append(action)
 
         return {
-            "assessment": assessment.strip() or "Ready to advance your career with focused skill development.",
-            "skill_gaps": skill_gaps[:5] if skill_gaps else [
-                {"skill": "Advanced programming", "importance": "Critical", "current_level": "Beginner",
-                 "target_level": "Intermediate"}
-            ],
-            "market_insights": market_insights.strip() or "Strong market demand for technical roles. Focus on building practical skills.",
-            "action_plan": action_plan[:6] if action_plan else [
-                "Build 2-3 portfolio projects",
-                "Practice coding daily",
-                "Network with professionals",
-                "Apply to 5-10 relevant positions weekly"
-            ]
+            "assessment": assessment.strip() or "Ready to advance with focused skill development.",
+            "skill_gaps": skill_gaps[:5] or [{"skill": "System Design", "importance": "Critical",
+                                               "current_level": "Beginner", "target_level": "Intermediate"}],
+            "market_insights": market_insights.strip() or "Strong demand for technical roles.",
+            "action_plan": action_plan[:6] or ["Build 2-3 portfolio projects", "Practice coding daily",
+                                                "Network with professionals", "Apply to relevant positions weekly"]
         }
 
-    def _generate_fallback_advice(self, current_skills: List[str], target_role: Optional[str]) -> Dict:
-        """Generate fallback advice if Claude fails"""
+    def _fallback_advice(self, current_skills, target_role):
         return {
-            "assessment": f"You have {len(current_skills)} relevant technical skills. Focus on building a strong portfolio and gaining practical experience.",
+            "assessment": f"You have {len(current_skills)} relevant skills. Focus on building practical experience.",
             "skill_gaps": [
-                {"skill": "Advanced programming", "importance": "Critical", "current_level": "Beginner",
-                 "target_level": "Intermediate"},
-                {"skill": "System design", "importance": "Important", "current_level": "None",
-                 "target_level": "Beginner"},
-                {"skill": "Cloud platforms", "importance": "Important", "current_level": "None",
-                 "target_level": "Beginner"}
+                {"skill": "System Design", "importance": "Critical", "current_level": "Beginner", "target_level": "Intermediate"},
+                {"skill": "Cloud Platforms", "importance": "Important", "current_level": "None", "target_level": "Beginner"},
             ],
-            "market_insights": f"The {target_role or 'software engineering'} market is competitive. Focus on building projects and networking.",
-            "action_plan": [
-                "Complete 2-3 personal projects demonstrating key skills",
-                "Contribute to open source projects",
-                "Build a professional online presence (GitHub, LinkedIn)",
-                "Practice coding interviews daily",
-                "Network with professionals in your target role"
-            ]
+            "market_insights": f"Strong market demand for {target_role or 'software engineering'}.",
+            "action_plan": ["Complete 2-3 portfolio projects", "Contribute to open source",
+                             "Build LinkedIn profile", "Practice interview questions"]
         }
 
-    def _generate_learning_path(
-            self,
-            current_skills: List[str],
-            target_role: Optional[str],
-            skill_gaps: List[Dict]
-    ) -> List[Dict]:
-        """Generate learning resource recommendations"""
-        learning_resources = []
+    def _generate_learning_path(self, current_skills, target_role, skill_gaps) -> List[Dict]:
+        resources = []
+        for gap in skill_gaps[:5]:
+            skill = gap['skill'].lower()
+            resources.extend(self._get_resources(skill))
+        return resources[:10]
 
-        # Extract missing skills
-        missing_skills = [gap['skill'].lower() for gap in skill_gaps]
-
-        # Generate recommendations for each missing skill
-        for skill in missing_skills[:5]:
-            resources = self._get_resources_for_skill(skill)
-            learning_resources.extend(resources)
-
-        return learning_resources[:10]  # Limit to 10 resources
-
-    def _get_resources_for_skill(self, skill: str) -> List[Dict]:
-        """Get learning resources for a specific skill"""
-        skill_lower = skill.lower()
-
-        # Skill-specific resource recommendations
-        skill_resources = {
-            "python": [
-                {"title": "Python for Everybody", "type": "Course",
-                 "url": "https://www.coursera.org/specializations/python", "duration": "4 months",
-                 "difficulty": "Beginner"},
-            ],
-            "java": [
-                {"title": "Java Programming Masterclass", "type": "Course",
-                 "url": "https://www.udemy.com/course/java-the-complete-java-developer-course/",
-                 "duration": "80 hours", "difficulty": "Beginner"},
-            ],
-            "javascript": [
-                {"title": "JavaScript - The Complete Guide", "type": "Course",
-                 "url": "https://www.udemy.com/course/javascript-the-complete-guide-2020-beginner-advanced/",
-                 "duration": "50 hours", "difficulty": "Intermediate"},
-            ],
-            "machine learning": [
-                {"title": "Machine Learning by Andrew Ng", "type": "Course",
-                 "url": "https://www.coursera.org/learn/machine-learning", "duration": "11 weeks",
-                 "difficulty": "Intermediate"},
-            ],
-            "docker": [
-                {"title": "Docker for Developers", "type": "Course",
-                 "url": "https://www.udemy.com/course/docker-kubernetes/", "duration": "6 hours",
-                 "difficulty": "Beginner"},
-            ],
-            "react": [
-                {"title": "React - The Complete Guide", "type": "Course",
-                 "url": "https://www.udemy.com/course/react-the-complete-guide/", "duration": "40 hours",
-                 "difficulty": "Intermediate"},
-            ],
-            "system design": [
-                {"title": "System Design Interview Course", "type": "Course",
-                 "url": "https://www.educative.io/courses/grokking-the-system-design-interview",
-                 "duration": "8 weeks", "difficulty": "Advanced"},
-            ],
-            "cloud": [
-                {"title": "AWS Certified Solutions Architect", "type": "Course",
-                 "url": "https://www.udemy.com/course/aws-certified-solutions-architect-associate/",
-                 "duration": "25 hours", "difficulty": "Intermediate"},
-            ]
+    def _get_resources(self, skill: str) -> List[Dict]:
+        db = {
+            "python": [{"title": "Python for Everybody", "type": "Course",
+                         "url": "https://coursera.org/specializations/python", "duration": "4 months", "difficulty": "Beginner"}],
+            "machine learning": [{"title": "ML by Andrew Ng", "type": "Course",
+                                   "url": "https://coursera.org/learn/machine-learning", "duration": "11 weeks", "difficulty": "Intermediate"}],
+            "docker": [{"title": "Docker for Developers", "type": "Course",
+                         "url": "https://udemy.com/course/docker-kubernetes/", "duration": "6 hours", "difficulty": "Beginner"}],
+            "react": [{"title": "React – The Complete Guide", "type": "Course",
+                        "url": "https://udemy.com/course/react-the-complete-guide/", "duration": "40 hours", "difficulty": "Intermediate"}],
+            "system design": [{"title": "Grokking System Design", "type": "Course",
+                                "url": "https://educative.io/courses/grokking-the-system-design-interview", "duration": "8 weeks", "difficulty": "Advanced"}],
         }
+        for key, res in db.items():
+            if key in skill or skill in key:
+                return res
+        return [{"title": f"Learn {skill.title()}", "type": "Course",
+                  "url": f"https://coursera.org/search?query={skill.replace(' ', '+')}", "duration": "Varies", "difficulty": "Intermediate"}]
 
-        # Check for partial matches
-        for key, resources in skill_resources.items():
-            if key in skill_lower or skill_lower in key:
-                return resources
-
-        # Generic resource
-        return [{
-            "title": f"Learn {skill.title()}",
-            "type": "Course",
-            "url": f"https://www.coursera.org/search?query={skill.replace(' ', '+')}",
-            "duration": "Varies",
-            "difficulty": "Intermediate"
-        }]
-
-    def _generate_career_progression(
-            self,
-            current_role: Optional[str],
-            target_role: Optional[str]
-    ) -> List[Dict]:
-        """Generate career progression path"""
-        progressions = {
-            "junior": [
-                {
-                    "role": "Junior Developer",
-                    "timeline": "Current - 2 years",
-                    "key_skills_needed": ["Basic programming", "Version control", "Testing"],
-                    "typical_responsibilities": ["Write code under supervision", "Fix bugs", "Learn best practices"]
-                },
-                {
-                    "role": "Mid-level Developer",
-                    "timeline": "2-4 years",
-                    "key_skills_needed": ["System design basics", "Code review", "Mentoring"],
-                    "typical_responsibilities": ["Own features end-to-end", "Code reviews", "Technical decisions"]
-                },
-                {
-                    "role": "Senior Developer",
-                    "timeline": "5+ years",
-                    "key_skills_needed": ["Architecture", "Leadership", "Cross-team collaboration"],
-                    "typical_responsibilities": ["Design systems", "Mentor team", "Strategic planning"]
-                }
-            ],
-            "default": [
-                {
-                    "role": "Entry Level",
-                    "timeline": "0-2 years",
-                    "key_skills_needed": ["Core technical skills", "Communication", "Problem-solving"],
-                    "typical_responsibilities": ["Learn and contribute", "Complete assigned tasks", "Build foundation"]
-                },
-                {
-                    "role": "Intermediate Level",
-                    "timeline": "2-5 years",
-                    "key_skills_needed": ["Advanced technical skills", "Project ownership", "Collaboration"],
-                    "typical_responsibilities": ["Lead small projects", "Mentor juniors", "Drive initiatives"]
-                },
-                {
-                    "role": "Senior Level",
-                    "timeline": "5+ years",
-                    "key_skills_needed": ["Expertise", "Strategy", "Leadership"],
-                    "typical_responsibilities": ["Define architecture", "Guide team direction", "Business impact"]
-                }
-            ]
-        }
-
-        # Determine which progression to use
-        if current_role and "junior" in current_role.lower():
-            return progressions["junior"]
-        else:
-            return progressions["default"]
+    def _generate_career_progression(self, current_role, target_role) -> List[Dict]:
+        return [
+            {"role": "Entry Level", "timeline": "0–2 years",
+             "key_skills_needed": ["Core technical skills", "Communication", "Problem-solving"],
+             "typical_responsibilities": ["Learn and contribute", "Complete assigned tasks"]},
+            {"role": "Mid Level", "timeline": "2–5 years",
+             "key_skills_needed": ["Advanced skills", "Project ownership", "Collaboration"],
+             "typical_responsibilities": ["Lead small projects", "Mentor juniors"]},
+            {"role": "Senior Level", "timeline": "5+ years",
+             "key_skills_needed": ["Architecture", "Leadership", "Strategy"],
+             "typical_responsibilities": ["Design systems", "Guide team direction"]},
+        ]
 
 
-# Singleton instance
 try:
     career_advisor = CareerAdvisor()
 except Exception as e:
-    logger.error(f"Failed to initialize CareerAdvisor: {str(e)}")
+    logger.error(f"Failed to initialize CareerAdvisor: {e}")
     career_advisor = None

@@ -8,68 +8,64 @@ load_dotenv(dotenv_path=env_path)
 
 
 class Settings:
-    # API Keys - Support both SERPAPI_KEY and SEARCHAPI_KEY
+    # ── API Keys ──────────────────────────────────────────────────────────────
     SERPAPI_KEY = os.getenv("SERPAPI_KEY") or os.getenv("SEARCHAPI_KEY")
-    ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
-    # Vector DB - Store in backend folder
+    # Groq replaces Anthropic for all LLM calls
+    GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+    # ── Groq Model Config ─────────────────────────────────────────────────────
+    # Fast model for chat / explanations (low latency)
+    GROQ_CHAT_MODEL = "llama-3.1-8b-instant"
+    # Smarter model for roadmaps, projects, career advice (higher quality)
+    GROQ_SMART_MODEL = "llama-3.3-70b-versatile"
+
+    # ── Vector DB ─────────────────────────────────────────────────────────────
     CHROMA_PERSIST_DIR = str(Path(__file__).parent / "chroma_db")
     EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
-    # Job Search Defaults
+    # ── Job Search Defaults ───────────────────────────────────────────────────
     DEFAULT_NUM_JOBS = 50
     DEFAULT_TOP_K = 10
 
-    # Claude Model - Updated to use correct model name
-    CLAUDE_MODEL = "claude-sonnet-4-20250514"
-
-    # Career Advisor Settings
+    # ── Token Limits ──────────────────────────────────────────────────────────
     MAX_TOKENS_CAREER_ADVICE = 2000
+    MAX_TOKENS_ROADMAP = 3000
+    MAX_TOKENS_CHAT = 1024       # job coach / interview coach responses
+    MAX_TOKENS_INSIGHTS = 1500   # market insights
 
-    # Tech Skills for Career Advisor
+    # ── Tech Skills for Career Advisor ───────────────────────────────────────
     TECH_SKILLS = [
-        # Programming Languages
         "python", "java", "javascript", "typescript", "c++", "c#", "ruby",
         "go", "rust", "php", "swift", "kotlin", "scala", "r",
-
-        # Frontend
         "react", "angular", "vue", "svelte", "html", "css", "sass",
         "tailwind", "bootstrap", "webpack", "vite",
-
-        # Backend
         "node.js", "nodejs", "express", "django", "flask", "fastapi", "spring boot",
         "asp.net", "rails", "laravel", "nest.js",
-
-        # Databases
         "sql", "mysql", "postgresql", "mongodb", "redis", "dynamodb",
         "oracle", "cassandra", "elasticsearch", "firebase",
-
-        # Cloud & DevOps
         "aws", "azure", "gcp", "docker", "kubernetes", "jenkins",
         "terraform", "ansible", "ci/cd", "github actions", "gitlab ci",
-
-        # Data Science & AI
         "machine learning", "deep learning", "tensorflow", "pytorch",
         "scikit-learn", "pandas", "numpy", "matplotlib", "nlp",
         "computer vision", "data analysis", "statistics",
-
-        # Tools & Others
         "git", "jira", "confluence", "linux", "bash", "agile", "scrum",
         "rest api", "restful", "graphql", "microservices", "system design",
-        "testing", "jest", "pytest", "selenium", "unit testing"
+        "testing", "jest", "pytest", "selenium", "unit testing",
+        # TN Automotive / EV additions
+        "bms", "can bus", "plc", "cnc", "scada", "iatf", "lean manufacturing",
+        "solidworks", "autocad", "catia", "embedded c", "microcontroller",
+        "arduino", "stm32", "iot", "industry 4.0", "hydraulics", "pneumatics",
     ]
 
     @classmethod
     def validate(cls):
         """Validate required settings"""
         errors = []
-
         if not cls.SERPAPI_KEY:
             errors.append("SERPAPI_KEY or SEARCHAPI_KEY not set in .env")
-
-        if not cls.ANTHROPIC_API_KEY:
-            errors.append("ANTHROPIC_API_KEY not set in .env")
-
+        if not cls.GROQ_API_KEY:
+            errors.append("GROQ_API_KEY not set in .env")
         return errors
 
 
