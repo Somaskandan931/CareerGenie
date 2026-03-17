@@ -129,16 +129,16 @@ const JobMatches = ({ jobQuery, jobLocation, resumeText, filters = {}, setCareer
 
   if (!resumeText) {
     return (
-      <div className="bg-white rounded-xl shadow-lg p-8 mb-8">
+      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-8 mb-8">
         <div className="flex items-center mb-6">
           <Star filled />
-          <h2 className="text-2xl font-bold text-gray-900 ml-3">Job Matches</h2>
+          <h2 className="text-2xl font-bold text-gray-900 dark:text-white ml-3">Job Matches</h2>
         </div>
         <div className="text-center py-16">
           <svg className="h-16 w-16 text-gray-300 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
           </svg>
-          <p className="text-gray-500 mt-4 text-lg">Upload your resume first to see job matches</p>
+          <p className="text-gray-500 dark:text-gray-400 mt-4 text-lg">Upload your resume first to see job matches</p>
         </div>
       </div>
     );
@@ -146,25 +146,25 @@ const JobMatches = ({ jobQuery, jobLocation, resumeText, filters = {}, setCareer
 
   if (!jobQuery) {
     return (
-      <div className="bg-white rounded-xl shadow-lg p-8 mb-8">
+      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-8 mb-8">
         <div className="flex items-center mb-6">
           <Star filled />
-          <h2 className="text-2xl font-bold text-gray-900 ml-3">Job Matches</h2>
+          <h2 className="text-2xl font-bold text-gray-900 dark:text-white ml-3">Job Matches</h2>
         </div>
         <div className="text-center py-16">
           <SearchIcon size="h-16 w-16 text-gray-300 mx-auto" />
-          <p className="text-gray-500 mt-4 text-lg">Search for jobs to see matches</p>
+          <p className="text-gray-500 dark:text-gray-400 mt-4 text-lg">Search for jobs to see matches</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="bg-white rounded-xl shadow-lg p-8 mb-8">
+    <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-8 mb-8">
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center">
           <Star filled />
-          <h2 className="text-2xl font-bold text-gray-900 ml-3">Job Matches</h2>
+          <h2 className="text-2xl font-bold text-gray-900 dark:text-white ml-3">Job Matches</h2>
         </div>
         {matchedJobs.length > 0 && (
           <div className="flex items-center gap-3">
@@ -172,7 +172,7 @@ const JobMatches = ({ jobQuery, jobLocation, resumeText, filters = {}, setCareer
               {matchedJobs.length} {matchedJobs.length === 1 ? 'match' : 'matches'}
             </span>
             {stats && (
-              <span className="text-xs text-gray-500">
+              <span className="text-xs text-gray-500 dark:text-gray-400">
                 ({stats.total_fetched} jobs analyzed)
               </span>
             )}
@@ -181,12 +181,12 @@ const JobMatches = ({ jobQuery, jobLocation, resumeText, filters = {}, setCareer
       </div>
 
       {error && (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
+        <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 rounded-lg p-4 mb-4">
           <div className="flex items-start">
             <AlertCircle />
             <div className="flex-1 ml-2">
-              <span className="text-red-800 font-medium block">Error</span>
-              <p className="text-red-700 mt-1 text-sm">{error}</p>
+              <span className="text-red-800 dark:text-red-300 font-medium block">Error</span>
+              <p className="text-red-700 dark:text-red-400 mt-1 text-sm">{error}</p>
               <button onClick={matchJobs} className="mt-2 px-3 py-1 bg-red-100 text-red-800 rounded hover:bg-red-200 text-sm font-medium">
                 Try Again
               </button>
@@ -198,26 +198,26 @@ const JobMatches = ({ jobQuery, jobLocation, resumeText, filters = {}, setCareer
       {loading && (
         <div className="flex flex-col items-center justify-center p-12">
           <div className="animate-spin rounded-full h-16 w-16 border-b-4 border-blue-600 mb-4"></div>
-          <p className="text-gray-600 font-medium">Finding your perfect job matches...</p>
-          <p className="text-gray-500 text-sm mt-2">This may take 10-20 seconds...</p>
+          <p className="text-gray-600 dark:text-gray-300 font-medium">Finding your perfect job matches...</p>
+          <p className="text-gray-500 dark:text-gray-400 text-sm mt-2">This may take 10-20 seconds...</p>
         </div>
       )}
 
       {!loading && matchedJobs.length === 0 && !error && (
         <div className="text-center py-16">
           <Briefcase size="h-16 w-16 text-gray-300 mx-auto" />
-          <p className="text-gray-500 mt-4 text-lg">No job matches found</p>
+          <p className="text-gray-500 dark:text-gray-400 mt-4 text-lg">No job matches found</p>
           <p className="text-gray-400 mt-2 text-sm">Try adjusting your filters or search terms</p>
         </div>
       )}
 
       <div className="space-y-6">
         {matchedJobs.map((job, index) => (
-          <div key={index} className="border-2 border-gray-200 rounded-xl p-6 hover:shadow-xl hover:border-blue-300 transition-all">
+          <div key={index} className="border-2 border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded-xl p-6 hover:shadow-xl hover:border-blue-300 dark:hover:border-blue-600 transition-all">
             <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between mb-4">
               <div className="flex-1">
-                <h3 className="text-xl font-bold text-gray-900 mb-2">{job.title}</h3>
-                <p className="text-lg text-gray-700 font-medium mb-1">{job.company}</p>
+                <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-2">{job.title}</h3>
+                <p className="text-lg text-gray-700 dark:text-gray-300 font-medium mb-1">{job.company}</p>
                 <div className="flex flex-wrap items-center gap-3 text-sm text-gray-600">
                   <span>📍 {job.location}</span>
                 </div>
@@ -235,8 +235,8 @@ const JobMatches = ({ jobQuery, jobLocation, resumeText, filters = {}, setCareer
             </div>
 
             {job.explanation && (
-              <div className="mb-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
-                <p className="text-sm text-gray-700 leading-relaxed">{job.explanation}</p>
+              <div className="mb-4 p-4 bg-blue-50 dark:bg-blue-900/30 rounded-lg border border-blue-200 dark:border-blue-700">
+                <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed">{job.explanation}</p>
               </div>
             )}
 
@@ -266,7 +266,7 @@ const JobMatches = ({ jobQuery, jobLocation, resumeText, filters = {}, setCareer
               </div>
             )}
 
-            <div className="flex flex-wrap gap-2 pt-4 border-t border-gray-200">
+            <div className="flex flex-wrap gap-2 pt-4 border-t border-gray-200 dark:border-gray-700">
               {job.apply_link && (
                 <a
                   href={job.apply_link}

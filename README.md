@@ -1,8 +1,3 @@
-Here is your **fully updated, professional `README.md`** based on your actual backend code and frontend — with **no emojis**, clean structure, and research-level clarity.
-
----
-
-
 # Career Genie
 
 ## Overview

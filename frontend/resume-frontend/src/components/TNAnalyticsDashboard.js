@@ -17,11 +17,6 @@ const SAMPLE_PROFILES = [
 ];
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
-const UploadIcon = () => (
-  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-  </svg>
-);
 const ChartIcon = () => (
   <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
@@ -312,7 +307,7 @@ const TNAnalyticsDashboard = () => {
               value={profilesJson}
               onChange={e => setProfilesJson(e.target.value)}
               placeholder={`[\n  {"id":"S001","name":"Arjun K","target_role":"EV Technician","text":"ITI electrician. BMS training. HV safety certified..."},\n  ...\n]`}
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg text-xs font-mono focus:ring-2 focus:ring-orange-400"
+              className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 text-xs font-mono focus:ring-2 focus:ring-orange-400"
             />
           </div>
 

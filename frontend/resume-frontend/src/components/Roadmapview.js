@@ -72,20 +72,20 @@ const WeekCard = ({ task, completed, onToggle }) => {
         </button>
 
         {/* Week label */}
-        <span className={`flex-shrink-0 text-xs font-bold px-2.5 py-1 rounded-full ${completed ? "bg-green-200 text-green-800" : "bg-indigo-100 text-indigo-700"}`}>
+        <span className={`flex-shrink-0 text-xs font-bold px-2.5 py-1 rounded-full ${completed ? "bg-green-200 dark:bg-green-800 text-green-800 dark:text-green-200" : "bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300"}`}>
           Week {task.week}
         </span>
 
         {/* Topic */}
         <div className="flex-1 min-w-0">
-          <p className={`font-semibold text-sm truncate ${completed ? "text-gray-500 line-through" : "text-gray-900"}`}>
+          <p className={`font-semibold text-sm truncate ${completed ? "text-gray-500 line-through" : "text-gray-900 dark:text-white"}`}>
             {task.topic}
           </p>
-          <p className="text-xs text-gray-500 truncate">{task.milestone}</p>
+          <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{task.milestone}</p>
         </div>
 
         {/* Hours */}
-        <div className="flex-shrink-0 flex items-center gap-1 text-gray-400 text-xs">
+        <div className="flex-shrink-0 flex items-center gap-1 text-gray-400 dark:text-gray-500 text-xs">
           <ClockIcon />
           {task.hours_per_week}h/wk
         </div>
@@ -95,16 +95,16 @@ const WeekCard = ({ task, completed, onToggle }) => {
 
       {/* Expanded content */}
       {open && (
-        <div className="border-t border-gray-100 p-4 space-y-4">
-          <p className="text-sm text-gray-700">{task.description}</p>
+        <div className="border-t border-gray-100 dark:border-gray-700 p-4 space-y-4">
+          <p className="text-sm text-gray-700 dark:text-gray-300">{task.description}</p>
 
           {/* Resources */}
           {task.resources && task.resources.length > 0 && (
             <div>
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 flex items-center gap-1">
+              <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2 flex items-center gap-1">
                 <BookIcon /> Resources
               </p>
-              <div className="space-y-2">
+              <div className="space-y-2 dark:text-gray-300">
                 {task.resources.map((r, i) => (
                   <div key={i} className="flex items-center gap-2 flex-wrap">
                     <ResourceBadge type={r.type} />
@@ -114,7 +114,7 @@ const WeekCard = ({ task, completed, onToggle }) => {
                         {r.title} <LinkIcon />
                       </a>
                     ) : (
-                      <span className="text-sm text-gray-700">{r.title}</span>
+                      <span className="text-sm text-gray-700 dark:text-gray-300">{r.title}</span>
                     )}
                     {r.duration && (
                       <span className="text-xs text-gray-400">· {r.duration}</span>
@@ -156,7 +156,7 @@ const PhaseSection = ({ phase, completedWeeks, onToggleWeek }) => {
   const gradient = PHASE_COLORS[(phase.phase_number - 1) % PHASE_COLORS.length];
 
   return (
-    <div className="rounded-2xl border border-gray-200 overflow-hidden shadow-sm">
+    <div className="rounded-2xl border border-gray-200 dark:border-gray-700 overflow-hidden shadow-sm">
       {/* Phase header */}
       <div
         className={`bg-gradient-to-r ${gradient} text-white p-5 cursor-pointer flex items-center justify-between`}
@@ -179,7 +179,7 @@ const PhaseSection = ({ phase, completedWeeks, onToggleWeek }) => {
       </div>
 
       {/* Progress bar */}
-      <div className="h-1.5 bg-gray-100">
+      <div className="h-1.5 bg-gray-100 dark:bg-gray-700">
         <div
           className={`h-full bg-gradient-to-r ${gradient} transition-all duration-500`}
           style={{ width: `${pct}%` }}
@@ -188,7 +188,7 @@ const PhaseSection = ({ phase, completedWeeks, onToggleWeek }) => {
 
       {/* Weeks */}
       {open && (
-        <div className="p-4 space-y-3">
+        <div className="p-4 space-y-3 bg-white dark:bg-gray-800">
           {phase.weekly_tasks?.map((task) => (
             <WeekCard
               key={task.week}
@@ -219,7 +219,7 @@ const RoadmapView = ({ roadmap, loading = false }) => {
   // ── Loading skeleton ──
   if (loading) {
     return (
-      <div className="bg-white rounded-2xl shadow-lg p-8">
+      <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-8">
         <div className="animate-pulse space-y-4">
           <div className="h-8 bg-gray-200 rounded w-2/3" />
           <div className="h-4 bg-gray-100 rounded w-full" />
@@ -311,13 +311,13 @@ const RoadmapView = ({ roadmap, loading = false }) => {
 
       {/* ── Tips ── */}
       {roadmap.tips && roadmap.tips.length > 0 && (
-        <div className="bg-gray-50 border border-gray-200 rounded-2xl p-6">
-          <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2">
+        <div className="bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-2xl p-6">
+          <h3 className="font-bold text-gray-800 dark:text-white mb-3 flex items-center gap-2">
             <span>💡</span> Pro Tips
           </h3>
-          <ul className="space-y-2">
+          <ul className="space-y-2 dark:text-gray-300">
             {roadmap.tips.map((tip, i) => (
-              <li key={i} className="flex items-start gap-2 text-sm text-gray-700">
+              <li key={i} className="flex items-start gap-2 text-sm text-gray-700 dark:text-gray-300">
                 <span className="flex-shrink-0 w-5 h-5 rounded-full bg-indigo-100 text-indigo-600 text-xs flex items-center justify-center font-bold mt-0.5">
                   {i + 1}
                 </span>

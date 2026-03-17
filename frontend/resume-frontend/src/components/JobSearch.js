@@ -93,10 +93,10 @@ const JobSearch = ({ setJobQuery, setJobLocation, setFilters }) => {
   };
 
   return (
-    <div className="bg-white rounded-xl shadow-lg p-8 mb-8">
+    <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-8 mb-8">
       <div className="flex items-center mb-6">
         <Briefcase />
-        <h2 className="text-2xl font-bold text-gray-900 ml-3">Job Search</h2>
+        <h2 className="text-2xl font-bold text-gray-900 dark:text-white ml-3">Job Search</h2>
       </div>
 
       {error && (
@@ -127,7 +127,7 @@ const JobSearch = ({ setJobQuery, setJobLocation, setFilters }) => {
         {/* Main Search Fields */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
               Job Title or Keywords <span className="text-red-500">*</span>
             </label>
             <div className="relative">
@@ -137,7 +137,7 @@ const JobSearch = ({ setJobQuery, setJobLocation, setFilters }) => {
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyPress={handleKeyPress}
-                className="w-full px-4 py-3 pl-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all"
+                className="w-full px-4 py-3 pl-10 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500"
                 disabled={loading}
               />
               <SearchIcon size="h-5 w-5 absolute left-3 top-3.5 text-gray-400" />
@@ -145,7 +145,7 @@ const JobSearch = ({ setJobQuery, setJobLocation, setFilters }) => {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Location</label>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Location</label>
             <div className="relative">
               <input
                 type="text"
@@ -153,7 +153,7 @@ const JobSearch = ({ setJobQuery, setJobLocation, setFilters }) => {
                 value={location}
                 onChange={(e) => setLocation(e.target.value)}
                 onKeyPress={handleKeyPress}
-                className="w-full px-4 py-3 pl-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all"
+                className="w-full px-4 py-3 pl-10 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500"
                 disabled={loading}
               />
               <svg className="absolute left-3 top-3.5 h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -165,15 +165,15 @@ const JobSearch = ({ setJobQuery, setJobLocation, setFilters }) => {
         </div>
 
         {/* Advanced Filters */}
-        <div className="mt-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
-          <p className="text-sm font-medium text-gray-700 mb-3">🔍 Advanced Filters</p>
+        <div className="mt-4 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600">
+          <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">🔍 Advanced Filters</p>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             <div>
-              <label className="block text-xs text-gray-600 mb-1">Experience Level</label>
+              <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Experience Level</label>
               <select
                 value={localFilters.experienceLevel}
                 onChange={(e) => handleFilterChange('experienceLevel', e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-green-500"
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm focus:ring-2 focus:ring-green-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
               >
                 <option value="">All Levels</option>
                 <option value="entry">Entry Level</option>
@@ -183,23 +183,23 @@ const JobSearch = ({ setJobQuery, setJobLocation, setFilters }) => {
             </div>
 
             <div>
-              <label className="block text-xs text-gray-600 mb-1">Min Match Score (%)</label>
+              <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Min Match Score (%)</label>
               <input
                 type="number"
                 min="0"
                 max="100"
                 value={localFilters.minMatchScore}
                 onChange={(e) => handleFilterChange('minMatchScore', Number(e.target.value))}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-green-500"
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm focus:ring-2 focus:ring-green-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
               />
             </div>
 
             <div>
-              <label className="block text-xs text-gray-600 mb-1">Posted Within</label>
+              <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Posted Within</label>
               <select
                 value={localFilters.postedWithinDays}
                 onChange={(e) => handleFilterChange('postedWithinDays', Number(e.target.value))}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-green-500"
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm focus:ring-2 focus:ring-green-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
               >
                 <option value="7">Last 7 Days</option>
                 <option value="14">Last 14 Days</option>
@@ -209,7 +209,7 @@ const JobSearch = ({ setJobQuery, setJobLocation, setFilters }) => {
             </div>
 
             <div>
-              <label className="block text-xs text-gray-600 mb-1">Remote Jobs</label>
+              <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Remote Jobs</label>
               <label className="flex items-center mt-2">
                 <input
                   type="checkbox"
@@ -257,22 +257,22 @@ const JobSearch = ({ setJobQuery, setJobLocation, setFilters }) => {
               });
             }}
             disabled={loading}
-            className="px-6 py-3 border-2 border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors font-medium"
+            className="px-6 py-3 border-2 border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors font-medium"
           >
             Clear
           </button>
         </div>
 
         {/* Popular Searches */}
-        <div className="mt-6 pt-6 border-t border-gray-200">
-          <p className="text-sm font-medium text-gray-700 mb-3">Popular Searches:</p>
+        <div className="mt-6 pt-6 border-t border-gray-200 dark:border-gray-700">
+          <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Popular Searches:</p>
           <div className="flex flex-wrap gap-2">
             {popularSearches.map((item, idx) => (
               <button
                 key={idx}
                 onClick={() => handleQuickSearch(item.query, item.location)}
                 disabled={loading}
-                className="px-4 py-2 bg-gray-100 text-gray-700 rounded-full text-sm hover:bg-gray-200 transition-colors disabled:opacity-50"
+                className="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-full text-sm hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors disabled:opacity-50"
               >
                 {item.query} • {item.location}
               </button>

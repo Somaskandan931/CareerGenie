@@ -103,8 +103,8 @@ const ProjectCard = ({ project, index, saved, onToggleSave }) => {
                 {project.estimated_weeks}w · {project.hours_per_week}h/wk
               </span>
             </div>
-            <h3 className="text-lg font-bold text-gray-900 leading-snug">{project.title}</h3>
-            <p className="text-sm text-gray-500 mt-0.5">{project.tagline}</p>
+            <h3 className="text-lg font-bold text-gray-900 dark:text-white leading-snug">{project.title}</h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">{project.tagline}</p>
           </div>
 
           {/* Save / bookmark button */}
@@ -122,9 +122,9 @@ const ProjectCard = ({ project, index, saved, onToggleSave }) => {
 
         {/* Tech stack pills */}
         {project.tech_stack && (
-          <div className="flex flex-wrap gap-1.5 mt-3">
+          <div className="flex flex-wrap gap-1.5 mt-3 dark:text-gray-300">
             {project.tech_stack.map((t, i) => (
-              <span key={i} className="bg-gray-100 text-gray-700 text-xs px-2.5 py-1 rounded-full font-medium">
+              <span key={i} className="bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 text-xs px-2.5 py-1 rounded-full font-medium">
                 {t}
               </span>
             ))}
@@ -142,26 +142,26 @@ const ProjectCard = ({ project, index, saved, onToggleSave }) => {
 
       {/* Expand toggle */}
       <button
-        className="w-full flex items-center justify-between px-5 py-3 bg-gray-50 border-t border-gray-100 text-sm text-gray-600 hover:bg-gray-100 transition-colors"
+        className="w-full flex items-center justify-between px-5 py-3 bg-gray-50 dark:bg-gray-700 border-t border-gray-100 dark:border-gray-600 text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors"
         onClick={() => setExpanded((o) => !o)}
       >
-        <span className="font-medium">{expanded ? "Show less" : "View details"}</span>
+        <span className="font-medium dark:text-gray-300">{expanded ? "Show less" : "View details"}</span>
         <ChevronIcon open={expanded} />
       </button>
 
       {/* Expanded section */}
       {expanded && (
-        <div className="px-5 pb-5 pt-4 border-t border-gray-100 space-y-4">
+        <div className="px-5 pb-5 pt-4 border-t border-gray-100 dark:border-gray-700 space-y-4">
           {/* Description */}
-          <p className="text-sm text-gray-700 leading-relaxed">{project.description}</p>
+          <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed">{project.description}</p>
 
           {/* Key features */}
           {project.key_features && project.key_features.length > 0 && (
             <div>
-              <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Key Features to Build</p>
+              <p className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">Key Features to Build</p>
               <ul className="space-y-1">
                 {project.key_features.map((f, i) => (
-                  <li key={i} className="flex items-start gap-2 text-sm text-gray-700">
+                  <li key={i} className="flex items-start gap-2 text-sm text-gray-700 dark:text-gray-300">
                     <span className="flex-shrink-0 mt-0.5 w-4 h-4 rounded-full bg-indigo-100 text-indigo-600 text-xs flex items-center justify-center font-bold">
                       {i + 1}
                     </span>
@@ -175,7 +175,7 @@ const ProjectCard = ({ project, index, saved, onToggleSave }) => {
           {/* Learning outcomes */}
           {project.learning_outcomes && project.learning_outcomes.length > 0 && (
             <div>
-              <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">What You'll Learn</p>
+              <p className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">What You'll Learn</p>
               <div className="flex flex-wrap gap-2">
                 {project.learning_outcomes.map((o, i) => (
                   <span key={i} className="text-xs bg-emerald-50 text-emerald-700 border border-emerald-200 px-2.5 py-1 rounded-full">
@@ -189,7 +189,7 @@ const ProjectCard = ({ project, index, saved, onToggleSave }) => {
           {/* Skills from gaps */}
           {project.skills_from_gaps && project.skills_from_gaps.length > 0 && (
             <div>
-              <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Addresses Your Skill Gaps</p>
+              <p className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">Addresses Your Skill Gaps</p>
               <div className="flex flex-wrap gap-2">
                 {project.skills_from_gaps.map((s, i) => (
                   <span key={i} className="text-xs bg-orange-50 text-orange-700 border border-orange-200 px-2.5 py-1 rounded-full font-medium">
@@ -202,11 +202,11 @@ const ProjectCard = ({ project, index, saved, onToggleSave }) => {
 
           {/* Bonus extensions */}
           {project.bonus_extensions && project.bonus_extensions.length > 0 && (
-            <div className="bg-gray-50 rounded-xl p-3">
-              <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">🚀 Bonus Extensions</p>
+            <div className="bg-gray-50 dark:bg-gray-700 rounded-xl p-3">
+              <p className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">🚀 Bonus Extensions</p>
               <ul className="space-y-1">
                 {project.bonus_extensions.map((e, i) => (
-                  <li key={i} className="text-sm text-gray-600">→ {e}</li>
+                  <li key={i} className="text-sm text-gray-600 dark:text-gray-400">→ {e}</li>
                 ))}
               </ul>
             </div>
@@ -218,7 +218,7 @@ const ProjectCard = ({ project, index, saved, onToggleSave }) => {
               href={project.github_template}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 px-4 py-2 rounded-lg transition-colors"
+              className="inline-flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 px-4 py-2 rounded-lg transition-colors"
             >
               <GithubIcon /> Browse related repos
             </a>
@@ -256,7 +256,7 @@ const ProjectSuggestions = ({ projects = [], loading = false }) => {
         <div className="animate-pulse h-8 bg-gray-200 rounded w-1/3 mb-6" />
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {[0, 1, 2, 3].map((i) => (
-            <div key={i} className="bg-white rounded-2xl border-2 border-gray-100 border-t-4 border-t-gray-200 p-5 space-y-3 animate-pulse">
+            <div key={i} className="bg-white dark:bg-gray-800 rounded-2xl border-2 border-gray-100 dark:border-gray-700 border-t-4 border-t-gray-200 p-5 space-y-3 animate-pulse">
               <div className="h-4 bg-gray-200 rounded w-1/3" />
               <div className="h-6 bg-gray-100 rounded w-3/4" />
               <div className="h-4 bg-gray-100 rounded w-full" />
@@ -275,10 +275,10 @@ const ProjectSuggestions = ({ projects = [], loading = false }) => {
   // ── Empty state ──
   if (!projects || projects.length === 0) {
     return (
-      <div className="bg-white rounded-2xl shadow-lg p-10 text-center">
+      <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-10 text-center">
         <div className="text-5xl mb-4">🛠️</div>
-        <h3 className="text-xl font-bold text-gray-800 mb-2">No Projects Yet</h3>
-        <p className="text-gray-500 text-sm">Generate a roadmap to get personalized project suggestions.</p>
+        <h3 className="text-xl font-bold text-gray-800 dark:text-white mb-2">No Projects Yet</h3>
+        <p className="text-gray-500 dark:text-gray-400 text-sm">Generate a roadmap to get personalized project suggestions.</p>
       </div>
     );
   }
@@ -288,15 +288,15 @@ const ProjectSuggestions = ({ projects = [], loading = false }) => {
       {/* ── Header ── */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h2 className="text-2xl font-black text-gray-900">🛠️ Project Suggestions</h2>
-          <p className="text-gray-500 text-sm mt-0.5">
+          <h2 className="text-2xl font-black text-gray-900 dark:text-white">🛠️ Project Suggestions</h2>
+          <p className="text-gray-500 dark:text-gray-400 text-sm mt-0.5">
             {projects.length} projects tailored to your skill gaps
             {savedProjects.size > 0 && ` · ${savedProjects.size} saved to portfolio`}
           </p>
         </div>
 
         {/* Filter tabs */}
-        <div className="flex gap-1.5 bg-gray-100 p-1 rounded-xl text-sm">
+        <div className="flex gap-1.5 bg-gray-100 dark:bg-gray-700 p-1 rounded-xl text-sm">
           {[
             { key: "all", label: "All" },
             { key: "beginner", label: "Beginner" },
@@ -307,7 +307,7 @@ const ProjectSuggestions = ({ projects = [], loading = false }) => {
             <button
               key={key}
               onClick={() => setFilter(key)}
-              className={`px-3 py-1.5 rounded-lg font-medium transition-all ${filter === key ? "bg-white shadow text-gray-900" : "text-gray-500 hover:text-gray-700"}`}
+              className={`px-3 py-1.5 rounded-lg font-medium transition-all ${filter === key ? "bg-white dark:bg-gray-800 shadow text-gray-900 dark:text-white" : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"}`}
             >
               {label}
             </button>
@@ -347,7 +347,7 @@ const ProjectSuggestions = ({ projects = [], loading = false }) => {
           ))}
         </div>
       ) : (
-        <div className="text-center py-10 text-gray-400">
+        <div className="text-center py-10 text-gray-400 dark:text-gray-500">
           <p className="text-4xl mb-3">🔍</p>
           <p>No projects match this filter.</p>
         </div>

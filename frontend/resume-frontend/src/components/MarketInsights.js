@@ -33,7 +33,7 @@ const SearchIcon = () => (
 // ─── Sparkline (tiny SVG line chart) ─────────────────────────────────────────
 const Sparkline = ({ data, color = "#6366f1" }) => {
   if (!data || data.length < 2) {
-    return <div className="h-8 flex items-center text-xs text-gray-400">No trend data</div>;
+    return <div className="h-8 flex items-center text-xs text-gray-400 dark:text-gray-500">No trend data</div>;
   }
   const w = 120, h = 32, pad = 2;
   const max = Math.max(...data, 1);
@@ -69,7 +69,7 @@ const DirectionBadge = ({ direction }) => {
 const TrendCard = ({ keyword, data, isRole = false }) => {
   const sparkColors = { rising: "#22c55e", falling: "#ef4444", stable: "#6366f1", unknown: "#9ca3af" };
   return (
-    <div className={`bg-white rounded-xl border p-4 ${isRole ? "border-indigo-200 bg-indigo-50" : "border-gray-200"}`}>
+    <div className={`bg-white dark:bg-gray-800 rounded-xl border p-4 ${isRole ? "border-indigo-200 bg-indigo-50" : "border-gray-200"}`}>
       <div className="flex items-start justify-between mb-2">
         <div className="flex-1 min-w-0">
           <p className={`font-semibold text-sm truncate ${isRole ? "text-indigo-900" : "text-gray-800"}`}>
@@ -138,28 +138,28 @@ const MarketInsights = ({ resumeSkills = [] }) => {
       </div>
 
       {/* Controls */}
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 space-y-4">
+      <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 p-6 space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
-            <label className="block text-xs font-semibold text-gray-700 mb-1">
+            <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1">
               Target Role <span className="text-red-500">*</span>
             </label>
             <input type="text" value={role} onChange={e => setRole(e.target.value)}
               placeholder="e.g. Machine Learning Engineer"
               onKeyDown={e => e.key === "Enter" && fetchInsights()}
-              className="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-400 focus:border-transparent" />
+              className="w-full px-3 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg text-sm focus:ring-2 focus:ring-indigo-400 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500" />
           </div>
           <div>
-            <label className="block text-xs font-semibold text-gray-700 mb-1">Location</label>
+            <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1">Location</label>
             <select value={location} onChange={e => setLocation(e.target.value)}
-              className="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-400 bg-white">
+              className="w-full px-3 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg text-sm focus:ring-2 focus:ring-indigo-400 bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
               {["India", "Tamil Nadu", "Bangalore", "Chennai", "Mumbai", "Hyderabad"].map(l => (
                 <option key={l} value={l}>{l}</option>
               ))}
             </select>
           </div>
           <div className="md:col-span-2">
-            <label className="block text-xs font-semibold text-gray-700 mb-1">
+            <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1">
               Skills to Track
               <span className="ml-1 font-normal text-gray-400">
                 (comma-separated — leave blank to use your resume skills)
@@ -167,7 +167,7 @@ const MarketInsights = ({ resumeSkills = [] }) => {
             </label>
             <input type="text" value={skillInput} onChange={e => setSkillInput(e.target.value)}
               placeholder="e.g. Python, TensorFlow, Docker, Kubernetes"
-              className="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-400 focus:border-transparent" />
+              className="w-full px-3 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg text-sm focus:ring-2 focus:ring-indigo-400 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500" />
           </div>
         </div>
 
@@ -188,7 +188,7 @@ const MarketInsights = ({ resumeSkills = [] }) => {
         </div>
 
         {error && (
-          <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-2 text-sm text-red-800">
+          <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 rounded-lg px-4 py-2 text-sm text-red-800 dark:text-red-300">
             {error}
           </div>
         )}
@@ -234,14 +234,14 @@ const MarketInsights = ({ resumeSkills = [] }) => {
           )}
 
           {/* AI Analysis */}
-          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-            <h3 className="font-bold text-gray-900 mb-4 flex items-center gap-2">
-              🤖 AI Market Analysis
-              <span className="text-xs font-normal text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 p-6">
+            <h3 className="font-bold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+              AI Market Analysis
+              <span className="text-xs font-normal text-gray-400 dark:text-gray-500 bg-gray-100 dark:bg-gray-700 px-2 py-0.5 rounded-full">
                 Powered by Groq
               </span>
             </h3>
-            <div className="prose prose-sm max-w-none text-gray-700">
+            <div className="prose prose-sm max-w-none text-gray-700 dark:text-gray-300">
               {data.analysis.split('\n').map((line, i) => {
                 if (line.startsWith('- ') || line.startsWith('• ')) {
                   return (

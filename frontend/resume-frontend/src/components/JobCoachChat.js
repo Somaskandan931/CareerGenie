@@ -62,7 +62,7 @@ const TypingIndicator = () => (
     <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gradient-to-br from-orange-500 to-red-500 text-white flex items-center justify-center">
       <BotIcon />
     </div>
-    <div className="bg-white border border-gray-200 rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm">
+    <div className="bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm">
       <div className="flex gap-1 items-center h-5">
         {[0, 1, 2].map(i => (
           <div key={i} className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
@@ -138,7 +138,7 @@ const JobCoachChat = ({ resumeText = "" }) => {
   };
 
   return (
-    <div className="bg-white rounded-2xl shadow-lg overflow-hidden flex flex-col" style={{ height: "680px" }}>
+    <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-lg overflow-hidden flex flex-col" style={{ height: "680px" }}>
       {/* Header */}
       <div className="bg-gradient-to-r from-orange-500 to-red-600 px-6 py-4 text-white flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -162,7 +162,7 @@ const JobCoachChat = ({ resumeText = "" }) => {
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-5 py-5 space-y-4 bg-gray-50">
+      <div className="flex-1 overflow-y-auto px-5 py-5 space-y-4 bg-gray-50 dark:bg-gray-900">
         {messages.map((m, i) => <Bubble key={i} message={m} />)}
         {loading && <TypingIndicator />}
         {error && (
@@ -177,12 +177,12 @@ const JobCoachChat = ({ resumeText = "" }) => {
 
       {/* Suggested questions — shown when only the greeting exists */}
       {messages.length === 1 && (
-        <div className="px-5 pb-3 bg-gray-50 border-t border-gray-100">
-          <p className="text-xs text-gray-500 mb-2 font-medium">Suggested questions:</p>
+        <div className="px-5 pb-3 bg-gray-50 dark:bg-gray-900 border-t border-gray-100 dark:border-gray-700">
+          <p className="text-xs text-gray-500 dark:text-gray-400 mb-2 font-medium">Suggested questions:</p>
           <div className="flex flex-wrap gap-1.5">
             {SUGGESTED_QUESTIONS.slice(0, 3).map((q, i) => (
               <button key={i} onClick={() => sendMessage(q)}
-                className="text-xs bg-white border border-gray-200 hover:border-orange-300 hover:text-orange-700 text-gray-600 px-3 py-1.5 rounded-full transition-colors">
+                className="text-xs bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 hover:border-orange-300 hover:text-orange-700 dark:text-gray-300 dark:hover:text-orange-400 text-gray-600 px-3 py-1.5 rounded-full transition-colors">
                 {q}
               </button>
             ))}
@@ -191,7 +191,7 @@ const JobCoachChat = ({ resumeText = "" }) => {
       )}
 
       {/* Input */}
-      <div className="px-5 py-4 bg-white border-t border-gray-200">
+      <div className="px-5 py-4 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700">
         <div className="flex gap-3 items-end">
           <textarea
             ref={inputRef}
@@ -200,7 +200,7 @@ const JobCoachChat = ({ resumeText = "" }) => {
             onChange={e => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Ask me anything about your career… (Enter to send, Shift+Enter for new line)"
-            className="flex-1 resize-none px-4 py-3 border border-gray-300 rounded-xl text-sm focus:ring-2 focus:ring-orange-400 focus:border-transparent outline-none"
+            className="flex-1 resize-none px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-xl text-sm focus:ring-2 focus:ring-orange-400 focus:border-transparent outline-none bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500"
             disabled={loading}
           />
           <button

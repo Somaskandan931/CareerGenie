@@ -23,6 +23,14 @@ from backend.services.tn_automotive_taxonomy import tn_extractor, NSQF_LEVELS, T
 from backend.services.job_coach import get_job_coach
 from backend.services.market_insights import get_market_insights
 from backend.services.interview_coach import get_interview_coach
+from backend.services.progress_store import progress_store
+from backend.models import (
+    DSAProblem, DSAProgressUpdate, DSABulkUpdate,
+    RoadmapCheckpointUpdate,
+    ProjectStatus, ProjectStatusUpdate,
+    InterviewEntryCreate, InterviewRoundAdd, InterviewOutcomeUpdate,
+    InterviewRound,
+)
 
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -262,6 +270,22 @@ def generate_projects(request: ProjectRequest):
 
 
 # ============================================================================
+# ROUTE ALIASES  (frontend calls /roadmap/generate and /projects/suggest)
+# ============================================================================
+
+@app.post("/roadmap/generate")
+def generate_roadmap_alias(request: RoadmapRequest):
+    """Alias for /generate/roadmap — keeps frontend URLs working."""
+    return generate_roadmap(request)
+
+
+@app.post("/projects/suggest")
+def suggest_projects_alias(request: ProjectRequest):
+    """Alias for /generate/projects — keeps frontend URLs working."""
+    return generate_projects(request)
+
+
+# ============================================================================
 # JOB COACH CHATBOT  ← NEW
 # ============================================================================
 
@@ -355,6 +379,215 @@ def evaluate_answer(request: EvaluateAnswerRequest):
         return {"status": "success", "feedback": feedback}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# PROGRESS TRACKING — DSA
+# ============================================================================
+
+@app.get("/progress/dsa")
+def list_dsa_problems(topic: Optional[str] = None, difficulty: Optional[str] = None,
+                       solved: Optional[bool] = None):
+    """List all DSA problems with optional filters."""
+    problems = progress_store.get_all_dsa()
+    if topic:
+        problems = [p for p in problems if p.get("topic") == topic]
+    if difficulty:
+        problems = [p for p in problems if p.get("difficulty") == difficulty]
+    if solved is not None:
+        problems = [p for p in problems if p.get("solved") == solved]
+    return {"status": "success", "problems": problems, "count": len(problems)}
+
+
+@app.post("/progress/dsa/add")
+def add_dsa_problem(problem: DSAProblem):
+    """Add a custom DSA problem."""
+    saved = progress_store.upsert_dsa_problem(problem.dict())
+    return {"status": "success", "problem": saved}
+
+
+@app.patch("/progress/dsa/update")
+def update_dsa_problem(update: DSAProgressUpdate):
+    """Mark a DSA problem as solved/unsolved."""
+    result = progress_store.update_dsa_progress(
+        update.problem_id, update.solved, update.attempts, update.notes)
+    if not result:
+        raise HTTPException(status_code=404, detail="Problem not found")
+    return {"status": "success", "problem": result}
+
+
+@app.patch("/progress/dsa/bulk-update")
+def bulk_update_dsa(bulk: DSABulkUpdate):
+    """Bulk update multiple DSA problems."""
+    results = []
+    for u in bulk.updates:
+        r = progress_store.update_dsa_progress(u.problem_id, u.solved, u.attempts, u.notes)
+        if r:
+            results.append(r)
+    return {"status": "success", "updated": len(results), "problems": results}
+
+
+# ============================================================================
+# PROGRESS TRACKING — ROADMAP
+# ============================================================================
+
+@app.get("/progress/roadmap/{roadmap_id}")
+def get_roadmap_progress(roadmap_id: str):
+    """Get all completed checkpoints for a roadmap."""
+    checkpoints = progress_store.get_roadmap_progress(roadmap_id)
+    return {"status": "success", "roadmap_id": roadmap_id,
+            "checkpoints": checkpoints, "count": len(checkpoints)}
+
+
+@app.post("/progress/roadmap/checkpoint")
+def update_roadmap_checkpoint(update: RoadmapCheckpointUpdate):
+    """Mark a roadmap week/phase checkpoint as done."""
+    result = progress_store.update_roadmap_checkpoint(
+        update.roadmap_id, update.phase_number, update.week_number,
+        update.completed, update.hours_logged or 0.0, update.notes or "")
+    return {"status": "success", "checkpoint": result}
+
+
+# ============================================================================
+# PROGRESS TRACKING — PROJECTS
+# ============================================================================
+
+@app.get("/progress/projects")
+def list_projects():
+    """Get all project statuses."""
+    return {"status": "success", "projects": progress_store.get_all_projects()}
+
+
+@app.post("/progress/projects")
+def add_project(project: ProjectStatus):
+    """Add or upsert a project status."""
+    saved = progress_store.upsert_project(project.dict())
+    return {"status": "success", "project": saved}
+
+
+@app.patch("/progress/projects/update")
+def update_project(update: ProjectStatusUpdate):
+    """Update project status, progress, or add a milestone."""
+    result = progress_store.update_project(
+        update.project_id,
+        status=update.status,
+        github_url=update.github_url,
+        live_url=update.live_url,
+        progress_percent=update.progress_percent,
+        milestone_done=update.milestone_done,
+        notes=update.notes,
+    )
+    if not result:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return {"status": "success", "project": result}
+
+
+# ============================================================================
+# PROGRESS TRACKING — INTERVIEW TRACKER
+# ============================================================================
+
+@app.get("/progress/interviews")
+def list_interviews():
+    """Get all interview entries."""
+    return {"status": "success", "interviews": progress_store.get_all_interviews()}
+
+
+@app.post("/progress/interviews")
+def create_interview(req: InterviewEntryCreate):
+    """Create a new interview/application entry."""
+    entry = progress_store.create_interview(
+        req.company, req.role, req.job_url or "", req.applied_at or "")
+    return {"status": "success", "interview": entry}
+
+
+@app.post("/progress/interviews/round")
+def add_interview_round(req: InterviewRoundAdd):
+    """Add a new round to an existing interview entry."""
+    result = progress_store.add_interview_round(req.interview_id, req.round.dict())
+    if not result:
+        raise HTTPException(status_code=404, detail="Interview entry not found")
+    return {"status": "success", "interview": result}
+
+
+@app.patch("/progress/interviews/outcome")
+def update_interview_outcome(req: InterviewOutcomeUpdate):
+    """Update the final outcome of an interview (offer/rejected/withdrawn)."""
+    result = progress_store.update_interview_outcome(
+        req.interview_id, req.final_outcome,
+        req.offer_details, req.notes or "")
+    if not result:
+        raise HTTPException(status_code=404, detail="Interview entry not found")
+    return {"status": "success", "interview": result}
+
+
+# ============================================================================
+# ANALYTICS DASHBOARD
+# ============================================================================
+
+@app.get("/progress/summary")
+def progress_summary():
+    """Full analytics summary — feeds the dashboard."""
+    return {"status": "success", **progress_store.get_summary()}
+
+
+# ============================================================================
+# USER-SCOPED PROGRESS ALIASES  (frontend calls /progress/{user_id}/...)
+# The app is single-user; user_id is accepted but ignored.
+# ============================================================================
+
+@app.get("/progress/{user_id}/summary")
+def progress_summary_by_user(user_id: str):
+    """User-scoped alias for /progress/summary."""
+    return {"status": "success", **progress_store.get_summary()}
+
+
+@app.get("/progress/{user_id}")
+def progress_overview_by_user(user_id: str):
+    """User-scoped overview: summary + all DSA, projects, interviews."""
+    summary = progress_store.get_summary()
+    return {
+        "status": "success",
+        "user_id": user_id,
+        "summary": summary,
+        "dsa_problems": progress_store.get_all_dsa(),
+        "projects": progress_store.get_all_projects(),
+        "interviews": progress_store.get_all_interviews(),
+    }
+
+
+@app.get("/progress/{user_id}/interviews/analytics")
+def interview_analytics_by_user(user_id: str):
+    """User-scoped interview analytics."""
+    interviews = progress_store.get_all_interviews()
+    total = len(interviews)
+    offers   = sum(1 for iv in interviews if iv.get("final_outcome") == "offer")
+    rejected = sum(1 for iv in interviews if iv.get("final_outcome") == "rejected")
+    active   = total - offers - rejected
+
+    # Stage breakdown
+    stage_counts: Dict[str, int] = {}
+    for iv in interviews:
+        stage = iv.get("current_stage", "Applied")
+        stage_counts[stage] = stage_counts.get(stage, 0) + 1
+
+    # Company list
+    companies = [{"company": iv.get("company"), "role": iv.get("role"),
+                  "stage": iv.get("current_stage"), "outcome": iv.get("final_outcome")}
+                 for iv in interviews]
+
+    return {
+        "status": "success",
+        "user_id": user_id,
+        "analytics": {
+            "total": total,
+            "offers": offers,
+            "rejected": rejected,
+            "active": active,
+            "offer_rate": round(offers / total * 100, 1) if total else 0,
+            "stage_breakdown": stage_counts,
+            "companies": companies,
+        },
+    }
 
 
 # ============================================================================

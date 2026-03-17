@@ -2,48 +2,141 @@
 Market Insights service.
 Uses pytrends (Google Trends) to fetch real trend data for tech skills/roles,
 then uses Groq to generate a written market analysis.
+
+Rate-limit handling:
+  - Exponential back-off with jitter on 429 responses (up to 3 retries per chunk)
+  - Polite inter-chunk delay (3–6 s) to avoid rapid-fire requests
+  - In-memory cache (TTL = 6 h) so repeated calls for the same keywords
+    never hit Google Trends again until the cache expires
 """
 from groq import Groq
 from typing import List, Dict, Optional
 import logging
 import json
+import time
+import random
+import hashlib
+import threading
 
 from backend.config import settings
 
 logger = logging.getLogger(__name__)
 
+# ── In-memory trend cache (TTL = 6 hours) ─────────────────────────────────────
+_trend_cache: Dict[str, Dict] = {}
+_cache_lock = threading.Lock()
+_CACHE_TTL_SECONDS = 6 * 3600
+
+
+def _cache_key(keywords: List[str], timeframe: str) -> str:
+    raw = "|".join(sorted(keywords)) + "|" + timeframe
+    return hashlib.md5(raw.encode()).hexdigest()
+
+
+def _cache_get(key: str) -> Optional[Dict]:
+    with _cache_lock:
+        entry = _trend_cache.get(key)
+        if entry and time.time() < entry["expires"]:
+            return entry["data"]
+        return None
+
+
+def _cache_set(key: str, data: Dict) -> None:
+    with _cache_lock:
+        _trend_cache[key] = {"data": data, "expires": time.time() + _CACHE_TTL_SECONDS}
+
+
+def _fetch_chunk_with_retry(keywords: List[str], timeframe: str,
+                             max_retries: int = 3) -> Dict[str, List]:
+    """
+    Fetch one chunk (≤5 keywords) from Google Trends with exponential
+    back-off on 429 / rate-limit errors.
+    """
+    from pytrends.request import TrendReq
+
+    for attempt in range(max_retries):
+        try:
+            if attempt > 0:
+                delay = (2 ** attempt) * random.uniform(1.0, 2.0)
+                logger.info(f"Retry {attempt}/{max_retries} for {keywords} — waiting {delay:.1f}s")
+                time.sleep(delay)
+
+            # retries= and backoff_factor= are NOT passed to TrendReq because
+            # they are forwarded to urllib3's Retry(), which renamed
+            # method_whitelist → allowed_methods in urllib3 ≥ 2.0, causing:
+            #   TypeError: Retry.__init__() got an unexpected keyword argument 'method_whitelist'
+            # Our own retry loop above handles all retries instead.
+            pt = TrendReq(
+                hl='en-US',
+                tz=330,
+                timeout=(10, 25),
+                requests_args={
+                    'headers': {
+                        'User-Agent': (
+                            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                            'AppleWebKit/537.36 (KHTML, like Gecko) '
+                            'Chrome/120.0.0.0 Safari/537.36'
+                        )
+                    }
+                }
+            )
+            pt.build_payload(keywords, timeframe=timeframe, geo='IN')
+            df = pt.interest_over_time()
+
+            result: Dict[str, List] = {}
+            if df.empty:
+                for kw in keywords:
+                    result[kw] = []
+            else:
+                for kw in keywords:
+                    result[kw] = df[kw].tolist() if kw in df.columns else []
+            return result
+
+        except Exception as e:
+            err_str = str(e)
+            is_rate_limit = "429" in err_str or "Too Many Requests" in err_str
+            if is_rate_limit and attempt < max_retries - 1:
+                logger.warning(f"Rate-limited by Google Trends (attempt {attempt + 1}) — will retry")
+                continue
+            logger.warning(f"Trend fetch failed for {keywords}: {e}")
+            return {kw: [] for kw in keywords}
+
+    return {kw: [] for kw in keywords}
+
 
 def _fetch_trends(keywords: List[str], timeframe: str = "today 12-m") -> Dict[str, List]:
     """
     Fetch Google Trends interest-over-time for a list of keywords.
-    Returns dict: {keyword: [list of weekly interest values 0-100]}
-    Falls back to empty dict if pytrends is unavailable or rate-limited.
+    - Checks the 6-hour in-memory cache first.
+    - Splits into chunks of ≤5 with polite inter-chunk delays.
+    - Each chunk retried up to 3× with exponential back-off on 429s.
+    - Falls back to empty lists if pytrends is unavailable.
     """
+    ck = _cache_key(keywords, timeframe)
+    cached = _cache_get(ck)
+    if cached is not None:
+        logger.info(f"Trend cache HIT for {len(keywords)} keywords")
+        return cached
+
     try:
-        from pytrends.request import TrendReq
-        pt = TrendReq(hl='en-US', tz=330)  # tz=330 → IST (India)
-        # Google Trends accepts max 5 keywords per request
-        chunks = [keywords[i:i+5] for i in range(0, len(keywords), 5)]
-        all_data: Dict[str, List] = {}
-
-        for chunk in chunks:
-            pt.build_payload(chunk, timeframe=timeframe, geo='IN')
-            df = pt.interest_over_time()
-            if df.empty:
-                for kw in chunk:
-                    all_data[kw] = []
-            else:
-                for kw in chunk:
-                    if kw in df.columns:
-                        all_data[kw] = df[kw].tolist()
-                    else:
-                        all_data[kw] = []
-
-        return all_data
-
-    except Exception as e:
-        logger.warning(f"pytrends unavailable ({e}) — returning empty trends")
+        import pytrends  # noqa — availability check only
+    except ImportError:
+        logger.warning("pytrends unavailable (No module named 'pytrends') — returning empty trends")
         return {kw: [] for kw in keywords}
+
+    chunks = [keywords[i:i + 5] for i in range(0, len(keywords), 5)]
+    all_data: Dict[str, List] = {}
+
+    for idx, chunk in enumerate(chunks):
+        if idx > 0:
+            delay = random.uniform(3.0, 6.0)
+            logger.info(f"Inter-chunk delay {delay:.1f}s before chunk {idx + 1}/{len(chunks)}")
+            time.sleep(delay)
+        all_data.update(_fetch_chunk_with_retry(chunk, timeframe))
+
+    _cache_set(ck, all_data)
+    logger.info(f"Trend cache SET for {len(keywords)} keywords (TTL {_CACHE_TTL_SECONDS // 3600}h)")
+    return all_data
 
 
 def _summarise_trend(values: List[int]) -> Dict:

@@ -15,28 +15,28 @@ const SkillAssessmentDashboard = ({ resumeSkills = [], jobSkills = [], compariso
   const categories = ['Programming', 'Frameworks', 'Databases', 'Cloud', 'Tools'];
 
   return (
-    <div className="bg-white rounded-xl shadow-lg p-8 mb-8">
-      <h2 className="text-2xl font-bold text-gray-900 mb-6">📊 Your Skill Assessment</h2>
+    <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-8 mb-8">
+      <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-6">📊 Your Skill Assessment</h2>
 
       {/* Overall Score */}
-      <div className="bg-gradient-to-r from-blue-50 to-purple-50 rounded-lg p-6 mb-6">
+      <div className="bg-gradient-to-r from-blue-50 to-purple-50 dark:from-blue-900/30 dark:to-purple-900/30 rounded-lg p-6 mb-6">
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-sm text-gray-600 mb-1">Overall Match</p>
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Overall Match</p>
             <p className="text-4xl font-bold text-blue-600">
               {Math.round(comparison.overall_match || 0)}%
             </p>
           </div>
           <div className="text-right">
-            <p className="text-sm text-gray-600">Skills Matched</p>
-            <p className="text-2xl font-semibold text-gray-700">
+            <p className="text-sm text-gray-600 dark:text-gray-400">Skills Matched</p>
+            <p className="text-2xl font-semibold text-gray-700 dark:text-gray-200">
               {comparison.matched_skills?.length || 0} / {jobSkills.length}
             </p>
           </div>
         </div>
 
         {/* Progress Bar */}
-        <div className="mt-4 bg-gray-200 rounded-full h-4 overflow-hidden">
+        <div className="mt-4 bg-gray-200 dark:bg-gray-700 rounded-full h-4 overflow-hidden">
           <div
             className="bg-gradient-to-r from-blue-500 to-purple-500 h-full transition-all duration-500"
             style={{ width: `${comparison.overall_match || 0}%` }}
@@ -51,12 +51,12 @@ const SkillAssessmentDashboard = ({ resumeSkills = [], jobSkills = [], compariso
           const color = score >= 80 ? 'green' : score >= 50 ? 'yellow' : 'red';
 
           return (
-            <div key={category} className="border border-gray-200 rounded-lg p-4">
-              <div className="flex items-center justify-between mb-2">
-                <h3 className="font-semibold text-gray-700">{category}</h3>
+            <div key={category} className="border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-750 rounded-lg p-4">
+              <div className="flex items-center justify-between mb-2 dark:text-white">
+                <h3 className="font-semibold text-gray-700 dark:text-gray-200">{category}</h3>
                 <span className={`text-${color}-600 font-bold`}>{Math.round(score)}%</span>
               </div>
-              <div className="bg-gray-200 rounded-full h-2">
+              <div className="bg-gray-200 dark:bg-gray-700 rounded-full h-2">
                 <div
                   className={`bg-${color}-500 h-full rounded-full transition-all`}
                   style={{ width: `${score}%` }}
@@ -70,7 +70,7 @@ const SkillAssessmentDashboard = ({ resumeSkills = [], jobSkills = [], compariso
       {/* Matched Skills */}
       {comparison.matched_skills && comparison.matched_skills.length > 0 && (
         <div className="mb-6">
-          <h3 className="text-lg font-semibold text-gray-900 mb-3 flex items-center">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-3 flex items-center">
             <span className="text-green-500 mr-2">✓</span>
             Your Strong Skills ({comparison.matched_skills.length})
           </h3>
@@ -78,13 +78,13 @@ const SkillAssessmentDashboard = ({ resumeSkills = [], jobSkills = [], compariso
             {comparison.matched_skills.map((skill, idx) => (
               <div
                 key={idx}
-                className="bg-green-50 border border-green-200 rounded-lg p-3 hover:shadow-md transition-shadow"
+                className="bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-700 rounded-lg p-3 hover:shadow-md transition-shadow"
               >
                 <div className="flex items-start justify-between">
                   <div>
-                    <p className="font-medium text-green-900 text-sm">{skill.skill || skill}</p>
+                    <p className="font-medium text-green-900 dark:text-green-300 text-sm">{skill.skill || skill}</p>
                     {skill.resume_level && (
-                      <p className="text-xs text-green-700 mt-1">
+                      <p className="text-xs text-green-700 dark:text-green-400 mt-1">
                         {skill.resume_level}
                         {skill.years_experience > 0 && ` • ${skill.years_experience}y`}
                       </p>
@@ -103,7 +103,7 @@ const SkillAssessmentDashboard = ({ resumeSkills = [], jobSkills = [], compariso
       {/* Skill Gaps */}
       {comparison.skill_gaps && comparison.skill_gaps.length > 0 && (
         <div className="mb-6">
-          <h3 className="text-lg font-semibold text-gray-900 mb-3 flex items-center">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-3 flex items-center">
             <span className="text-orange-500 mr-2">⚠</span>
             Skills to Develop ({comparison.skill_gaps.length})
           </h3>
@@ -143,7 +143,7 @@ const SkillAssessmentDashboard = ({ resumeSkills = [], jobSkills = [], compariso
       {/* Bonus Skills */}
       {comparison.bonus_skills && comparison.bonus_skills.length > 0 && (
         <div>
-          <h3 className="text-lg font-semibold text-gray-900 mb-3 flex items-center">
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-3 flex items-center">
             <span className="text-blue-500 mr-2">🌟</span>
             Bonus Skills ({comparison.bonus_skills.length})
           </h3>
@@ -164,9 +164,9 @@ const SkillAssessmentDashboard = ({ resumeSkills = [], jobSkills = [], compariso
       )}
 
       {/* Action Recommendation */}
-      <div className="mt-6 bg-purple-50 border border-purple-200 rounded-lg p-4">
-        <h4 className="font-semibold text-purple-900 mb-2">💡 Quick Recommendation</h4>
-        <p className="text-sm text-purple-800">
+      <div className="mt-6 bg-purple-50 dark:bg-purple-900/30 border border-purple-200 dark:border-purple-700 rounded-lg p-4">
+        <h4 className="font-semibold text-purple-900 dark:text-purple-300 mb-2">💡 Quick Recommendation</h4>
+        <p className="text-sm text-purple-800 dark:text-purple-200">
           {(comparison.overall_match || 0) >= 80
             ? "Excellent match! Apply immediately and highlight your matching skills."
             : (comparison.overall_match || 0) >= 60
