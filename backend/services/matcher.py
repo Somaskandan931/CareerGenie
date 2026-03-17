@@ -1,5 +1,17 @@
+"""
+matcher.py  (UPGRADED)
+======================
+Changes from brutal evaluation:
+  ✅ Static 35/45/20 weights → adaptive per-user weights via FeedbackEngine
+  ✅ Stores per-component scores (semantic_score, skills_score, title_score)
+     so FeedbackEngine can do meaningful gradient updates
+  ✅ Calls personalise_score() for users with feedback history
+  ✅ Cold-start handled transparently (falls back to prior weights)
+  ✅ component_contributions dict attached to each match for the feedback
+     recording endpoint to persist
+"""
 from groq import Groq
-from typing import List, Dict
+from typing import List, Dict, Optional
 import logging
 import re
 from datetime import datetime
@@ -7,318 +19,274 @@ from datetime import datetime
 from backend.config import settings
 from backend.services.vector_store import vector_store
 
-logger = logging.getLogger( __name__ )
+logger = logging.getLogger(__name__)
 
 
-class JobMatcher :
-    def __init__ ( self ) :
-        """Initialize Groq client"""
-        if not settings.GROQ_API_KEY :
-            raise ValueError( "GROQ_API_KEY not configured" )
+class JobMatcher:
+    def __init__(self):
+        if not settings.GROQ_API_KEY:
+            raise ValueError("GROQ_API_KEY not configured")
+        self.client = Groq(api_key=settings.GROQ_API_KEY)
 
-        self.client = Groq( api_key=settings.GROQ_API_KEY )
-
-        # Common tech skills for matching
         self.skill_patterns = [
-            # Programming Languages
             r'\b(python|java|javascript|typescript|c\+\+|c#|ruby|go|rust|php|swift|kotlin)\b',
-            # Frameworks
             r'\b(react|angular|vue|django|flask|fastapi|spring|express|node\.?js)\b',
-            # Databases
             r'\b(sql|mysql|postgresql|mongodb|redis|dynamodb|oracle)\b',
-            # Cloud & DevOps
             r'\b(aws|azure|gcp|docker|kubernetes|jenkins|terraform|ansible)\b',
-            # AI/ML
             r'\b(machine learning|deep learning|tensorflow|pytorch|scikit-learn|nlp|computer vision)\b',
-            # Tools
-            r'\b(git|jira|confluence|linux|agile|scrum)\b'
+            r'\b(git|jira|confluence|linux|agile|scrum)\b',
+        ]
+        self.critical_skills = [
+            "python", "java", "javascript", "sql", "aws", "react", "docker",
         ]
 
-        # Critical skills for penalty calculation
-        self.critical_skills = ["python", "java", "javascript", "sql", "aws", "react", "docker"]
+    # ── Public API ─────────────────────────────────────────────────────────────
 
-    def match_resume_to_jobs ( self, resume_text: str, top_k: int = 10,
-                               force_refresh: bool = False,
-                               location: str = "India" ) -> List[Dict] :
-        """
-        Match resume to jobs using RAG + Groq
+    def match_resume_to_jobs(
+        self,
+        resume_text: str,
+        top_k: int = 10,
+        force_refresh: bool = False,
+        location: str = "India",
+        user_id: Optional[str] = None,   # NEW — enables personalised ranking
+    ) -> List[Dict]:
+        logger.info(f"Matching resume to top {top_k} jobs (user_id={user_id})")
 
-        Process:
-        1. Fetch fresh jobs from scraper (optional)
-        2. Semantic search (RAG retrieval)
-        3. Skill extraction
-        4. Groq LLM explanation
-        5. Score calculation
-        """
-        logger.info( f"Matching resume to top {top_k} jobs..." )
+        # Optionally refresh job index
+        if force_refresh or vector_store.get_stats()["total_jobs"] < 20:
+            self._refresh_jobs(resume_text, location, force_refresh)
 
-        # Optionally refresh jobs from scraper
-        if force_refresh or vector_store.get_stats()["total_jobs"] < 20 :
-            try :
-                from backend.services.job_scraper import get_job_scraper
-                scraper = get_job_scraper()
-
-                # Extract target role from resume or use default
-                target_role = self._extract_target_role( resume_text )
-
-                # Fetch fresh jobs
-                fresh_jobs = scraper.fetch_jobs(
-                    query=target_role,
-                    location=location,
-                    num_jobs=50
-                )
-
-                # Index them
-                if fresh_jobs :
-                    # Clear old jobs if force refresh
-                    if force_refresh :
-                        vector_store.clear()
-                    vector_store.index_jobs( fresh_jobs )
-                    logger.info( f"Refreshed with {len( fresh_jobs )} fresh jobs" )
-            except Exception as e :
-                logger.error( f"Failed to refresh jobs: {e}" )
-
-        # Step 1: RAG Retrieval
-        retrieved_jobs = vector_store.search( resume_text, top_k=top_k * 2 )  # Get more for filtering
-
-        if not retrieved_jobs :
-            logger.warning( "No jobs found in vector store" )
+        retrieved_jobs = vector_store.search(resume_text, top_k=top_k * 2)
+        if not retrieved_jobs:
+            logger.warning("No jobs found in vector store")
             return []
 
-        # Step 2: Extract skills
-        resume_skills = self._extract_skills( resume_text )
-        logger.info( f"Extracted {len( resume_skills )} skills from resume" )
+        resume_skills = self._extract_skills(resume_text)
+        logger.info(f"Extracted {len(resume_skills)} skills from resume")
+
+        # Load adaptive weights (falls back to prior for cold-start users)
+        adaptive_weights = self._get_weights(user_id)
 
         matches = []
+        for job in retrieved_jobs:
+            job_skills = self._extract_skills(job["description"])
+            matched    = list(set(resume_skills) & set(job_skills))
+            missing    = list(set(job_skills)   - set(resume_skills))
 
-        for job in retrieved_jobs :
-            job_skills = self._extract_skills( job['description'] )
+            # ── Compute raw component scores (0-100) ──────────────────────────
+            sem_raw   = max(0.0, 100.0 * (1 - min(job.get("distance", 0.5), 1.0)))
+            skill_raw = self._skills_raw(matched, missing)
+            title_raw = self._calculate_title_match(resume_text, job["title"])
+            # title_raw is already 0-20; normalise to 0-100 for uniform weighting
+            title_raw_norm = title_raw * 5.0
 
-            matched_skills = list( set( resume_skills ) & set( job_skills ) )
-            missing_skills = list( set( job_skills ) - set( resume_skills ) )
-
-            # Calculate match score with improved algorithm
-            match_score = self._calculate_score(
-                matched_skills,
-                missing_skills,
-                job.get( 'distance', 0.5 ),
-                job['title'],
-                resume_text
+            # ── Weighted sum with adaptive weights ────────────────────────────
+            base_score = (
+                adaptive_weights["semantic"] * sem_raw
+                + adaptive_weights["skills"]   * skill_raw
+                + adaptive_weights["title"]    * title_raw_norm
             )
 
-            # Skip low matches
-            if match_score < 30 :
+            # Critical skill penalty
+            critical_missing = [s for s in missing if s.lower() in self.critical_skills]
+            penalty = min(15, len(critical_missing) * 5)
+            base_score = max(0.0, min(100.0, base_score - penalty))
+
+            if base_score < 30:
                 continue
 
-            # Step 3: LLM Explanation (only for top matches)
+            # ── Personalisation layer ─────────────────────────────────────────
+            final_score = base_score
+            if user_id:
+                try:
+                    from backend.services.feedback_engine import get_feedback_engine
+                    engine = get_feedback_engine()
+                    final_score = engine.personalise_score(
+                        user_id,
+                        job,
+                        {
+                            "semantic": sem_raw,
+                            "skills":   skill_raw,
+                            "title":    title_raw_norm,
+                        },
+                    )
+                except Exception as e:
+                    logger.warning(f"Personalisation skipped: {e}")
+
+            # LLM explanation for strong matches
             explanation = ""
-            if match_score > 50 :
+            if final_score > 50:
                 explanation = self._generate_explanation(
-                    resume_text,
-                    job['title'],
-                    job['company'],
-                    job['description'],
-                    matched_skills,
-                    missing_skills
+                    resume_text, job["title"], job["company"],
+                    job["description"], matched, missing,
                 )
 
-            recommendation = self._get_recommendation( match_score )
+            matches.append({
+                "job_id":       job["id"],
+                "title":        job["title"],
+                "company":      job["company"],
+                "location":     job["location"],
+                "match_score":  round(final_score, 1),
+                # ── per-component scores (NEW — needed by FeedbackEngine) ──
+                "semantic_score": round(sem_raw,        1),
+                "skills_score":   round(skill_raw,      1),
+                "title_score":    round(title_raw_norm, 1),
+                # ── contribution fractions (used for weight gradient update) ─
+                "component_contributions": {
+                    "semantic": adaptive_weights["semantic"],
+                    "skills":   adaptive_weights["skills"],
+                    "title":    adaptive_weights["title"],
+                },
+                "matched_skills":    matched[:8],
+                "missing_skills":    missing[:5],
+                "explanation":       explanation,
+                "recommendation":    self._get_recommendation(final_score),
+                "apply_link":        job.get("apply_link", ""),
+                "fetched_at":        job.get("fetched_at", datetime.now().isoformat()),
+                "personalised":      user_id is not None,
+            })
 
-            matches.append( {
-                "job_id" : job['id'],
-                "title" : job['title'],
-                "company" : job['company'],
-                "location" : job['location'],
-                "match_score" : round( match_score, 1 ),
-                "matched_skills" : matched_skills[:8],  # Limit display
-                "missing_skills" : missing_skills[:5],
-                "explanation" : explanation,
-                "recommendation" : recommendation,
-                "apply_link" : job.get( 'apply_link', '' ),
-                "fetched_at" : job.get( 'fetched_at', datetime.now().isoformat() )
-            } )
+        matches.sort(key=lambda x: x["match_score"], reverse=True)
+        logger.info(f"Generated {len(matches[:top_k])} job matches")
+        return matches[:top_k]
 
-        # Sort by match score and limit to top_k
-        matches.sort( key=lambda x : x['match_score'], reverse=True )
-        matches = matches[:top_k]
+    # ── Helpers ────────────────────────────────────────────────────────────────
 
-        logger.info( f"Generated {len( matches )} job matches" )
-        return matches
+    def _get_weights(self, user_id: Optional[str]) -> Dict[str, float]:
+        """Return adaptive weights for user or population prior."""
+        if not user_id:
+            return {"semantic": 0.35, "skills": 0.45, "title": 0.20}
+        try:
+            from backend.services.feedback_engine import get_feedback_engine
+            return get_feedback_engine().get_weights(user_id)
+        except Exception:
+            return {"semantic": 0.35, "skills": 0.45, "title": 0.20}
 
-    def _extract_target_role ( self, resume_text: str ) -> str :
-        """Extract target role from resume or use default"""
-        # Common roles to look for
+    def _refresh_jobs(self, resume_text: str, location: str, force: bool) -> None:
+        try:
+            from backend.services.job_scraper import get_job_scraper
+            scraper    = get_job_scraper()
+            target_role = self._extract_target_role(resume_text)
+            fresh_jobs  = scraper.fetch_jobs(query=target_role, location=location, num_jobs=50)
+            if fresh_jobs:
+                if force:
+                    vector_store.clear()
+                vector_store.index_jobs(fresh_jobs)
+                logger.info(f"Refreshed with {len(fresh_jobs)} fresh jobs")
+        except Exception as e:
+            logger.error(f"Failed to refresh jobs: {e}")
+
+    def _skills_raw(self, matched: List[str], missing: List[str]) -> float:
+        total = len(matched) + len(missing)
+        if total == 0:
+            return 50.0
+        return 100.0 * len(matched) / total
+
+    def _extract_target_role(self, resume_text: str) -> str:
         common_roles = [
             "software engineer", "data scientist", "machine learning engineer",
             "web developer", "devops engineer", "product manager", "data analyst",
             "frontend developer", "backend developer", "full stack developer",
-            "cloud engineer", "site reliability engineer", "sre"
+            "cloud engineer", "site reliability engineer",
         ]
-
         text_lower = resume_text.lower()
-
-        # Look for explicit target in resume
-        for role in common_roles :
-            if role in text_lower :
+        for role in common_roles:
+            if role in text_lower:
                 return role
+        return "software engineer"
 
-        # Check for job titles in current role
-        current_role_match = re.search( r'current role[:\s]+([a-z\s]+)', text_lower )
-        if current_role_match :
-            return current_role_match.group( 1 ).strip()
-
-        return "software engineer"  # default
-
-    def _extract_skills ( self, text: str ) -> List[str] :
-        """Extract technical skills using regex"""
+    def _extract_skills(self, text: str) -> List[str]:
         text_lower = text.lower()
-        skills = set()
+        skills: set = set()
+        for pattern in self.skill_patterns:
+            for match in re.findall(pattern, text_lower, re.IGNORECASE):
+                if isinstance(match, tuple):
+                    skills.update(m for m in match if m)
+                else:
+                    skills.add(match.lower())
+        return sorted(skills)
 
-        for pattern in self.skill_patterns :
-            matches = re.findall( pattern, text_lower, re.IGNORECASE )
-            for match in matches :
-                # Handle tuples from regex groups
-                if isinstance( match, tuple ) :
-                    skills.update( [m for m in match if m] )
-                else :
-                    skills.add( match.lower() )
-
-        return sorted( list( skills ) )
-
-    def _calculate_score ( self, matched_skills: List[str], missing_skills: List[str],
-                           semantic_distance: float, job_title: str = "",
-                           resume_text: str = "" ) -> float :
-        """Calculate more accurate match score"""
-
-        # 1. Semantic similarity (vector search) - 35% weight
-        semantic_score = max( 0, 35 * (1 - min( semantic_distance, 1.0 )) )
-
-        # 2. Skills match - 45% weight
-        total_skills = len( matched_skills ) + len( missing_skills )
-        if total_skills > 0 :
-            # Weight by skill importance
-            skills_ratio = len( matched_skills ) / total_skills
-            skills_score = 45 * skills_ratio
-        else :
-            skills_score = 22.5  # Default if no skills extracted (half of 45)
-
-        # 3. Title/role match - 20% weight
-        title_score = self._calculate_title_match( resume_text, job_title )
-
-        # Calculate total
-        total_score = semantic_score + skills_score + title_score
-
-        # Apply penalties for critical missing skills
-        critical_missing = [s for s in missing_skills if s.lower() in self.critical_skills]
-        penalty = min( 15, len( critical_missing ) * 5 )
-
-        total_score = max( 0, min( 100, total_score - penalty ) )
-
-        return round( total_score, 1 )
-
-    def _calculate_title_match ( self, resume_text: str, job_title: str ) -> float :
-        """Calculate how well job title matches resume"""
+    def _calculate_title_match(self, resume_text: str, job_title: str) -> float:
         resume_lower = resume_text.lower()
-        title_lower = job_title.lower()
+        title_lower  = job_title.lower()
+        title_words  = set(re.findall(r'\b[a-z]+\b', title_lower))
 
-        # Extract key terms from job title
-        title_words = set( re.findall( r'\b[a-z]+\b', title_lower ) )
-
-        # Common variations mapping
         variations = {
-            "engineer" : ["engineer", "developer", "programmer", "architect"],
-            "developer" : ["developer", "engineer", "programmer", "coder"],
-            "senior" : ["senior", "lead", "principal", "staff"],
-            "junior" : ["junior", "entry", "fresher", "graduate"],
-            "data" : ["data", "analytics", "analyst", "scientist"],
-            "cloud" : ["cloud", "aws", "azure", "gcp"],
-            "frontend" : ["frontend", "front-end", "ui", "react", "vue", "angular"],
-            "backend" : ["backend", "back-end", "api", "server"],
-            "fullstack" : ["fullstack", "full-stack", "full stack"],
+            "engineer":  ["engineer", "developer", "programmer", "architect"],
+            "developer": ["developer", "engineer", "programmer", "coder"],
+            "senior":    ["senior", "lead", "principal", "staff"],
+            "junior":    ["junior", "entry", "fresher", "graduate"],
+            "data":      ["data", "analytics", "analyst", "scientist"],
+            "cloud":     ["cloud", "aws", "azure", "gcp"],
+            "frontend":  ["frontend", "front-end", "ui", "react", "vue", "angular"],
+            "backend":   ["backend", "back-end", "api", "server"],
+            "fullstack": ["fullstack", "full-stack", "full stack"],
         }
 
         score = 0
-        matched_terms = set()
-
-        for word in title_words :
-            if word in resume_lower :
+        matched_terms: set = set()
+        for word in title_words:
+            if word in resume_lower:
                 score += 4
-                matched_terms.add( word )
-            elif word in variations :
-                for variant in variations[word] :
-                    if variant in resume_lower and variant not in matched_terms :
+                matched_terms.add(word)
+            elif word in variations:
+                for variant in variations[word]:
+                    if variant in resume_lower and variant not in matched_terms:
                         score += 2
-                        matched_terms.add( variant )
+                        matched_terms.add(variant)
                         break
+        return min(20.0, float(score))
 
-        return min( 20, score )  # Max 20 points
+    def _get_recommendation(self, score: float) -> str:
+        if score >= 80:  return "Excellent Match"
+        if score >= 65:  return "Strong Match"
+        if score >= 50:  return "Good Match"
+        if score >= 35:  return "Moderate Match"
+        return "Weak Match"
 
-    def _get_recommendation ( self, score: float ) -> str :
-        """Recommendation label"""
-        if score >= 80 :
-            return "Excellent Match"
-        elif score >= 65 :
-            return "Strong Match"
-        elif score >= 50 :
-            return "Good Match"
-        elif score >= 35 :
-            return "Moderate Match"
-        else :
-            return "Weak Match"
+    def _generate_explanation(
+        self,
+        resume_text: str,
+        job_title: str,
+        job_company: str,
+        job_description: str,
+        matched_skills: List[str],
+        missing_skills: List[str],
+    ) -> str:
+        prompt = f"""You are an expert career advisor analysing a job match.
+Resume: {resume_text[:1200]}
+Job: {job_title} at {job_company}
+Description: {job_description[:1000]}
+Matched Skills: {', '.join(matched_skills) if matched_skills else 'None'}
+Missing Skills: {', '.join(missing_skills[:3]) if missing_skills else 'None'}
 
-    def _generate_explanation ( self, resume_text: str, job_title: str,
-                                job_company: str, job_description: str,
-                                matched_skills: List[str], missing_skills: List[str] ) -> str :
-        """Generate explanation using Groq LLM"""
+Write 2-3 sentences: what makes this a good/weak match, one gap to address, final action."""
 
-        resume_preview = resume_text[:1500]
-        job_desc_preview = job_description[:1500]
-
-        prompt = f"""You are an expert career advisor analyzing a job match.
-
-Resume Summary:
-{resume_preview}
-
-Job Position: {job_title} at {job_company}
-Job Description:
-{job_desc_preview}
-
-Matched Skills: {', '.join( matched_skills ) if matched_skills else 'None identified'}
-Missing Skills: {', '.join( missing_skills[:3] ) if missing_skills else 'None identified'}
-
-Provide a brief, actionable 2-3 sentence explanation:
-1. What makes this a good/weak match
-2. One specific gap to address
-3. Final recommendation (apply/practice/prepare)
-"""
-
-        try :
-            response = self.client.chat.completions.create(
+        try:
+            resp = self.client.chat.completions.create(
                 model=settings.GROQ_CHAT_MODEL,
                 messages=[
-                    {"role" : "system", "content" : "You are an expert career advisor."},
-                    {"role" : "user", "content" : prompt}
+                    {"role": "system", "content": "You are an expert career advisor."},
+                    {"role": "user",   "content": prompt},
                 ],
                 max_tokens=150,
-                temperature=0.7
+                temperature=0.7,
+            )
+            return resp.choices[0].message.content.strip()
+        except Exception as e:
+            logger.error(f"Explanation error: {e}")
+            return (
+                f"Good match on {len(matched_skills)} skills. "
+                + (f"Focus on {missing_skills[0]}." if missing_skills else "Ready to apply!")
             )
 
-            return response.choices[0].message.content.strip()
 
-        except Exception as e :
-            logger.error( f"Error generating explanation: {str( e )}" )
-            if matched_skills :
-                return f"Good match based on {len( matched_skills )} aligned skills. {'Focus on ' + missing_skills[0] if missing_skills else 'Ready to apply!'}"
-            else :
-                return f"Consider building skills in {missing_skills[0] if missing_skills else 'key areas'} before applying."
+# ── Singleton ──────────────────────────────────────────────────────────────────
+_job_matcher: Optional[JobMatcher] = None
 
 
-# Singleton instance
-_job_matcher = None
-
-
-def get_job_matcher () :
+def get_job_matcher() -> JobMatcher:
     global _job_matcher
-    if _job_matcher is None :
+    if _job_matcher is None:
         _job_matcher = JobMatcher()
     return _job_matcher
