@@ -220,7 +220,10 @@ const TNAnalyticsDashboard = () => {
       const res = await fetch(`${API_BASE_URL}/tn/batch-analytics`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ institution_name: institutionName, profiles }),
+        body: JSON.stringify({
+          institution_name: institutionName,
+          profiles
+        }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));

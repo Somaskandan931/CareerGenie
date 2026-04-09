@@ -1,10 +1,12 @@
-from groq import Groq
+import google.genai as genai
 from typing import List, Dict, Optional
 import logging
 import json
 import re
 
 from backend.config import settings
+
+_genai_client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
 logger = logging.getLogger( __name__ )
 
@@ -111,9 +113,7 @@ RELIABLE_RESOURCES = {
 
 class RoadmapGenerator :
     def __init__ ( self ) :
-        if not settings.GROQ_API_KEY :
-            raise ValueError( "GROQ_API_KEY not configured" )
-        self.client = Groq( api_key=settings.GROQ_API_KEY )
+        pass
 
     def _get_reliable_resources ( self, topic: str ) -> List[Dict] :
         """Get reliable resources for a topic"""
@@ -195,12 +195,15 @@ Respond ONLY with a valid JSON object with this exact structure:
 Use the reliable resource URLs provided. Make it specific and actionable."""
 
         try :
-            response = self.client.chat.completions.create(
-                model=settings.GROQ_SMART_MODEL,
-                max_tokens=settings.MAX_TOKENS_ROADMAP,
-                messages=[{"role" : "user", "content" : prompt}]
-            )
-            raw = response.choices[0].message.content.strip()
+            response = _genai_client.models.generate_content(
+                model=settings.GEMINI_SMART_MODEL,
+                config=genai.types.GenerateContentConfig(
+                    temperature=0.7,
+                    max_output_tokens=settings.MAX_TOKENS_ROADMAP,
+                ),
+                contents=prompt,
+        )
+            raw = response.text.strip()
             raw = re.sub( r"```json\s*", "", raw )
             raw = re.sub( r"```\s*", "", raw )
             brace_idx = raw.find( '{' )

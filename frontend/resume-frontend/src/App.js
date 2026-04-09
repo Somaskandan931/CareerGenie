@@ -1,4 +1,4 @@
-import { useState, useEffect, createContext } from "react";
+import { useState, useEffect, useCallback, createContext } from "react";
 
 import JobSearch from './components/JobSearch';
 import JobMatches from './components/JobMatches';
@@ -10,9 +10,9 @@ import JobCoachChat from './components/JobCoachChat';
 import MarketInsights from './components/MarketInsights';
 import InterviewCoach from './components/InterviewCoach';
 import ProgressDashboard from './components/ProgressDashboard';
-import ATSScorer from './components/ATSScorer';
 import ResumeRewriter from './components/ResumeRewriter';
 import MentorSearch from './components/MentorSearch';
+import ResumeAnalyzer from './components/ResumeAnalyzer';
 
 export const DarkModeContext = createContext({ dark: false, toggle: () => {} });
 
@@ -46,6 +46,7 @@ const icons = {
   institution: "M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4",
   ats:         "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4",
   upload:      "M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12",
+  recruiter:   "M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z",
   check:       "M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z",
   alert:       "M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z",
   doc:         "M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z",
@@ -259,7 +260,7 @@ const DebateSynthesis = ({ synthesis }) => {
 };
 
 // ─── Learning Path Tab ────────────────────────────────────────────────────────
-const LearningPathTab = ({ resumeText, careerAdvice }) => {
+const LearningPathTab = ({ resumeText, careerAdvice, onImported }) => {
   const [targetRole, setTargetRole]           = useState("");
   const [skillGaps, setSkillGaps]             = useState("");
   const [durationWeeks, setDurationWeeks]     = useState(12);
@@ -285,8 +286,15 @@ const LearningPathTab = ({ resumeText, careerAdvice }) => {
     setError(null); setLoadingRoadmap(true); setRoadmap(null);
     try {
       const res = await fetch(`${API_BASE_URL}/roadmap/generate`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ resume_text: resumeText || "", target_role: targetRole.trim(), skill_gaps: parseGaps(), duration_weeks: durationWeeks, experience_level: experienceLevel || null }),
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          resume_text: resumeText || "",
+          target_role: targetRole.trim(),
+          skill_gaps: parseGaps(),
+          duration_weeks: durationWeeks,
+          experience_level: experienceLevel || null
+        }),
       });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`);
       const data = await res.json();
@@ -327,12 +335,31 @@ const LearningPathTab = ({ resumeText, careerAdvice }) => {
     setImportingProgress(true); setImportSuccess(null);
     try {
       const ops = [];
-      if (roadmap) ops.push(fetch(`${API_BASE_URL}/progress/roadmap/import`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ user_id: USER_ID, roadmap }) }));
-      if (projects.length > 0) ops.push(fetch(`${API_BASE_URL}/progress/projects/import`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ user_id: USER_ID, projects }) }));
+      if (roadmap) ops.push(fetch(`${API_BASE_URL}/progress/roadmap/import`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: USER_ID,
+          roadmap
+        })
+      }));
+      if (projects.length > 0) ops.push(fetch(`${API_BASE_URL}/progress/projects/import`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: USER_ID,
+          roadmap: projects  // backend RoadmapImportRequest uses field "roadmap" for the payload
+        })
+      }));
       await Promise.all(ops);
       setImportSuccess(`Imported ${roadmap ? "roadmap" : ""}${roadmap && projects.length ? " + " : ""}${projects.length ? `${projects.length} projects` : ""} into your Progress Dashboard.`);
-    } catch { setImportSuccess("Import failed — make sure the backend is running."); }
-    finally { setImportingProgress(false); }
+      // Notify App so ProgressDashboard re-fetches with fresh data
+      if (onImported) onImported(roadmap, projects);
+    } catch {
+      setImportSuccess("Import failed — make sure the backend is running.");
+    } finally {
+      setImportingProgress(false);
+    }
   };
 
   const inputCls = "w-full px-3 py-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none";
@@ -435,9 +462,13 @@ export default function App() {
   const [filters, setFilters]                 = useState({});
   const [careerAdvice, setCareerAdvice]       = useState(null);
   const [skillComparison, setSkillComparison] = useState(null);
-  const [synthesis, setSynthesis]             = useState(null); // debate synthesis result
+  const [synthesis, setSynthesis]             = useState(null);
   const [backendConfig, setBackendConfig]     = useState(null);
   const [dark, setDark]                       = useState(() => localStorage.getItem("cg-theme") === "dark");
+  // Lifted from LearningPathTab so ProgressDashboard can react to imports
+  const [importedRoadmap, setImportedRoadmap]   = useState(null);
+  const [importedProjects, setImportedProjects] = useState([]);
+  const [importKey, setImportKey]               = useState(0); // increment to force ProgressDashboard re-fetch
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark);
@@ -462,21 +493,23 @@ export default function App() {
     finally { setUploading(false); }
   };
 
-  // When career advice arrives, also try to pull debate synthesis if present
-  const handleSetCareerAdvice = (advice) => {
+  // Wrapped in useCallback so the reference is stable across re-renders.
+  // Without this, every render creates a new function → JobMatches sees a new
+  // dep → useCallback recreates matchJobs → useEffect re-fires → infinite loop.
+  const handleSetCareerAdvice = useCallback((advice) => {
     setCareerAdvice(advice);
     if (advice?.synthesis) setSynthesis(advice.synthesis);
     else if (advice?.action_plan) setSynthesis(null);
-  };
+  }, []); // no deps — only calls stable React state setters
 
   const resumeSkills = skillComparison?.resume_skills?.map(s => s.skill) || [];
 
   const NAV_MAIN = [
-    { key: "jobs",      label: "Job Matches",    icon: icons.jobs },
-    { key: "progress",  label: "Progress",       icon: icons.progress },
-    { key: "learning",  label: "Learning",       icon: icons.learning, badge: careerAdvice?.skill_gaps?.length > 0 ? careerAdvice.skill_gaps.length : null },
-    { key: "interview", label: "Interview Prep", icon: icons.interview },
-    { key: "ats",       label: "ATS Scorer",     icon: icons.ats },
+    { key: "jobs",      label: "Job Matches",     icon: icons.jobs },
+    { key: "progress",  label: "Progress",        icon: icons.progress },
+    { key: "learning",  label: "Learning",        icon: icons.learning, badge: careerAdvice?.skill_gaps?.length > 0 ? careerAdvice.skill_gaps.length : null },
+    { key: "interview", label: "Interview Prep",  icon: icons.interview },
+    { key: "analyzer",  label: "Resume Analyzer", icon: icons.ats },
     { key: "rewriter",  label: "Resume Rewriter", icon: icons.pen },
   ];
 
@@ -488,15 +521,15 @@ export default function App() {
   ];
 
   const PAGE_TITLES = {
-    jobs: "Job Matches",
-    progress: "Progress Dashboard",
-    learning: "Learning Path",
+    jobs:      "Job Matches",
+    progress:  "Progress Dashboard",
+    learning:  "Learning Path",
     interview: "Interview Coach",
-    ats: "ATS Resume Scorer",
-    rewriter: "Resume Rewriter",
-    coach: "Job Coach",
-    mentors: "Expert Mentors",
-    insights: "Market Insights",
+    analyzer:  "Resume Analyzer",
+    rewriter:  "Resume Rewriter",
+    coach:     "Job Coach",
+    mentors:   "Expert Mentors",
+    insights:  "Market Insights",
     institution: "Institution Analytics"
   };
 
@@ -652,8 +685,8 @@ export default function App() {
               </>
             )}
 
-            {activeTab === "learning"    && <LearningPathTab resumeText={resumeText} careerAdvice={careerAdvice} />}
-            {activeTab === "progress"    && <ProgressDashboard />}
+            {activeTab === "learning"    && <LearningPathTab resumeText={resumeText} careerAdvice={careerAdvice} onImported={(rm, prj) => { setImportedRoadmap(rm); setImportedProjects(prj); setImportKey(k => k + 1); }} />}
+            {activeTab === "progress"    && <ProgressDashboard key={importKey} importedRoadmap={importedRoadmap} importedProjects={importedProjects} />}
             {activeTab === "coach"       && (
               <div className="space-y-4">
                 <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-5">
@@ -670,7 +703,7 @@ export default function App() {
             )}
             {activeTab === "insights"    && <MarketInsights resumeSkills={resumeSkills} />}
             {activeTab === "interview"   && <InterviewCoach resumeText={resumeText} />}
-            {activeTab === "ats"         && <ATSScorer resumeText={resumeText} />}
+            {activeTab === "analyzer"    && <ResumeAnalyzer resumeText={resumeText} />}
             {activeTab === "rewriter"    && <ResumeRewriter resumeText={resumeText} />}
             {activeTab === "institution" && <TNAnalyticsDashboard />}
 

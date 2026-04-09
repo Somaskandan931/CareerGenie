@@ -1,3 +1,4 @@
+import google.genai as genai
 """
 career_advisor.py  (UPGRADED)
 ==============================
@@ -9,22 +10,20 @@ Changes from brutal evaluation:
      user profile (preferred roles, skill interest)
   ✅ Keeps original fallback / parsing logic intact
 """
-from groq import Groq
 from typing import List, Dict, Optional
 import logging
 import re
 
 from backend.config import settings
 
+_genai_client = genai.Client(api_key=settings.GEMINI_API_KEY)
+
 logger = logging.getLogger(__name__)
 
 
 class CareerAdvisor:
     def __init__(self):
-        if not settings.GROQ_API_KEY:
-            raise ValueError("GROQ_API_KEY not configured")
-        self.client = Groq(api_key=settings.GROQ_API_KEY)
-        logger.info("CareerAdvisor initialized with Groq")
+        pass
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -162,13 +161,16 @@ Using ALL of the above context, provide structured career advice:
 Be direct, specific, and reference the data provided — do NOT give generic advice."""
 
         try:
-            response = self.client.chat.completions.create(
-                model=settings.GROQ_SMART_MODEL,
-                max_tokens=settings.MAX_TOKENS_CAREER_ADVICE,
-                messages=[{"role": "user", "content": prompt}],
-            )
+            response = _genai_client.models.generate_content(
+                model=settings.GEMINI_SMART_MODEL,
+                config=genai.types.GenerateContentConfig(
+                    temperature=0.7,
+                    max_output_tokens=settings.MAX_TOKENS_CAREER_ADVICE,
+                ),
+                contents=prompt,
+        )
             return self._parse_response(
-                response.choices[0].message.content.strip(), current_skills
+                response.text.strip(), current_skills
             )
         except Exception as e:
             logger.error(f"Career advice error: {e}")

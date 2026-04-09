@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Agent Debate System
 ====================
@@ -27,7 +28,7 @@ This is the architecture pattern used in:
 
 We implement it with Groq as the underlying model, no extra frameworks.
 """
-from __future__ import annotations
+import google.genai as genai
 
 import json
 import logging
@@ -36,8 +37,9 @@ import time
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional, Tuple
 
-from groq import Groq
 from backend.config import settings
+
+_genai_client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
 logger = logging.getLogger(__name__)
 
@@ -83,19 +85,18 @@ class DebateAgent:
     def __init__(self, agent_id: str, persona: str) -> None:
         self.agent_id = agent_id
         self.persona  = persona
-        self.client   = Groq(api_key=settings.GROQ_API_KEY)
 
     def _call(self, prompt: str, max_tokens: int = 800, temp: float = 0.7) -> str:
-        resp = self.client.chat.completions.create(
-            model=settings.GROQ_SMART_MODEL,
-            max_tokens=max_tokens,
-            temperature=temp,
-            messages=[
-                {"role": "system", "content": self.persona},
-                {"role": "user",   "content": prompt},
-            ],
+        response = _genai_client.models.generate_content(
+            model=settings.GEMINI_SMART_MODEL,
+            config=genai.types.GenerateContentConfig(
+                system_instruction=self.persona,
+                temperature=temp,
+                max_output_tokens=max_tokens,
+            ),
+            contents=prompt,
         )
-        return resp.choices[0].message.content.strip()
+        return response.text.strip()
 
     def _parse_json(self, raw: str) -> Any:
         raw = re.sub(r"^```json\s*", "", raw)
@@ -290,7 +291,7 @@ class ReflectionLayer:
     If self-assessed confidence drops below MIN_CONFIDENCE, flags for retry.
     """
     def __init__(self):
-        self.client = Groq(api_key=settings.GROQ_API_KEY)
+        pass
 
     def reflect(self, agent_name: str, output: Dict, task_description: str) -> Dict:
         prompt = f"""You just produced this output as the {agent_name}:
@@ -307,13 +308,15 @@ Honestly assess your output. Return ONLY valid JSON:
   "retry_hint": "<what to do differently if retrying>"
 }}"""
         try:
-            resp = self.client.chat.completions.create(
-                model=settings.GROQ_SMART_MODEL,
-                max_tokens=300,
-                temperature=0.2,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            raw  = resp.choices[0].message.content.strip()
+            response = _genai_client.models.generate_content(
+                model=settings.GEMINI_SMART_MODEL,
+                config=genai.types.GenerateContentConfig(
+                    temperature=0.2,
+                    max_output_tokens=300,
+                ),
+                contents=prompt,
+        )
+            raw  = response.text.strip()
             raw  = re.sub(r"^```json\s*", "", raw)
             raw  = re.sub(r"\s*```$",     "", raw)
             data = json.loads(raw)

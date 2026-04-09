@@ -1,4 +1,4 @@
-from groq import Groq
+import google.genai as genai
 from typing import Dict, Optional
 import logging
 import json
@@ -6,15 +6,14 @@ import re
 
 from backend.config import settings
 
+_genai_client = genai.Client(api_key=settings.GEMINI_API_KEY)
+
 logger = logging.getLogger(__name__)
 
 
 class ResumeRewriter:
     def __init__(self):
-        if not settings.GROQ_API_KEY:
-            raise ValueError("GROQ_API_KEY not configured")
-        self.client = Groq(api_key=settings.GROQ_API_KEY)
-        logger.info("ResumeRewriter initialized with Groq")
+        pass
 
     def rewrite(self, resume_text: str, target_role: str = "Software Engineer",
                 tone: str = "professional") -> Dict:
@@ -57,13 +56,15 @@ REWRITING RULES — follow every rule strictly:
 Return ONLY the rewritten resume text. No commentary, no markdown fences, no explanation."""
 
         try:
-            response = self.client.chat.completions.create(
-                model=settings.GROQ_SMART_MODEL,
-                max_tokens=settings.MAX_TOKENS_ROADMAP,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.4,
-            )
-            return response.choices[0].message.content.strip()
+            response = _genai_client.models.generate_content(
+                model=settings.GEMINI_SMART_MODEL,
+                config=genai.types.GenerateContentConfig(
+                    temperature=0.4,
+                    max_output_tokens=settings.MAX_TOKENS_ROADMAP,
+                ),
+                contents=prompt,
+        )
+            return response.text.strip()
         except Exception as e:
             logger.error(f"Resume rewrite error: {e}")
             return resume_text  # fallback: return original
@@ -91,13 +92,15 @@ Return ONLY a valid JSON array with exactly 4 objects (no markdown, no extra tex
 ]"""
 
         try:
-            response = self.client.chat.completions.create(
-                model=settings.GROQ_CHAT_MODEL,
-                max_tokens=800,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.2,
-            )
-            raw = response.choices[0].message.content.strip()
+            response = _genai_client.models.generate_content(
+                model=settings.GEMINI_CHAT_MODEL,
+                config=genai.types.GenerateContentConfig(
+                    temperature=0.2,
+                    max_output_tokens=800,
+                ),
+                contents=prompt,
+        )
+            raw = response.text.strip()
             raw = re.sub(r"^```json\s*", "", raw)
             raw = re.sub(r"^```\s*",     "", raw)
             raw = re.sub(r"\s*```$",     "", raw)

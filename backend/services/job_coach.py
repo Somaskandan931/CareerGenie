@@ -1,13 +1,15 @@
+import google.genai as genai
 """
 Job Coach / Career Counsellor chatbot service.
 Maintains conversation history per session and answers career questions
 using the candidate's resume as context.
 """
-from groq import Groq
 from typing import List, Dict, Optional
 import logging
 
 from backend.config import settings
+
+_genai_client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
 logger = logging.getLogger(__name__)
 
@@ -29,10 +31,7 @@ Never make up job listings or company-specific salary data — give ranges inste
 
 class JobCoach:
     def __init__(self):
-        if not settings.GROQ_API_KEY:
-            raise ValueError("GROQ_API_KEY not configured")
-        self.client = Groq(api_key=settings.GROQ_API_KEY)
-        logger.info("JobCoach initialized with Groq")
+        pass
 
     def chat(self, messages: List[Dict], resume_text: Optional[str] = None) -> str:
         """
@@ -50,12 +49,16 @@ class JobCoach:
             system += f"\n\nCandidate's resume context:\n{resume_text[:1500]}"
 
         try:
-            response = self.client.chat.completions.create(
-                model=settings.GROQ_CHAT_MODEL,
-                max_tokens=settings.MAX_TOKENS_CHAT,
-                messages=[{"role": "system", "content": system}] + messages
-            )
-            return response.choices[0].message.content.strip()
+            response = _genai_client.models.generate_content(
+                model=settings.GEMINI_CHAT_MODEL,
+                config=genai.types.GenerateContentConfig(
+                    system_instruction=system,
+                    temperature=0.7,
+                    max_output_tokens=settings.MAX_TOKENS_CHAT,
+                ),
+                contents=prompt,
+        )
+            return response.text.strip()
         except Exception as e:
             logger.error(f"JobCoach error: {e}")
             raise Exception(f"Job coach unavailable: {str(e)}")

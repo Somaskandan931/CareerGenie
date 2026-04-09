@@ -11,14 +11,14 @@ class Settings:
     # ── API Keys ──────────────────────────────────────────────────────────────
     SERPAPI_KEY = os.getenv("SERPAPI_KEY") or os.getenv("SEARCHAPI_KEY")
 
-    # Groq replaces Anthropic for all LLM calls
-    GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+    # Google Gemini — primary LLM provider (free tier, no daily token cap)
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-    # ── Groq Model Config ─────────────────────────────────────────────────────
-    # Fast model for chat / explanations (low latency)
-    GROQ_CHAT_MODEL = "llama-3.1-8b-instant"
-    # Smarter model for roadmaps, projects, career advice (higher quality)
-    GROQ_SMART_MODEL = "llama-3.3-70b-versatile"
+    # ── Gemini Model Config ───────────────────────────────────────────────────
+    # Fast model for chat / explanations (free tier, high rate limits)
+    GEMINI_CHAT_MODEL = "gemini-2.5-flash"
+    # Smarter model for roadmaps, projects, career advice, debate (free tier)
+    GEMINI_SMART_MODEL = "gemini-2.5-flash"
 
     # ── Vector DB ─────────────────────────────────────────────────────────────
     CHROMA_PERSIST_DIR = str(Path(__file__).parent / "chroma_db")
@@ -30,9 +30,21 @@ class Settings:
 
     # ── Token Limits ──────────────────────────────────────────────────────────
     MAX_TOKENS_CAREER_ADVICE = 2000
-    MAX_TOKENS_ROADMAP = 6000       # increased: 70b model needs room for full JSON roadmap
-    MAX_TOKENS_CHAT = 1024          # job coach / interview coach responses
-    MAX_TOKENS_INSIGHTS = 1500      # market insights
+    MAX_TOKENS_ROADMAP = 6000
+    MAX_TOKENS_CHAT = 1024
+    MAX_TOKENS_INSIGHTS = 1500
+
+    # ── Feedback & Learning Engine Storage ────────────────────────────────────
+    FEEDBACK_STORE_DIR = os.getenv(
+        "FEEDBACK_STORE_DIR",
+        str(Path(__file__).parent.parent / "tmp" / "career_genie_feedback")
+    )
+
+    # ── Learning-to-Rank Storage ──────────────────────────────────────────────
+    LTR_STORE_DIR = os.getenv(
+        "LTR_STORE_DIR",
+        str(Path(__file__).parent.parent / "tmp" / "career_genie_ltr")
+    )
 
     # ── Tech Skills for Career Advisor ───────────────────────────────────────
     TECH_SKILLS = [
@@ -64,9 +76,15 @@ class Settings:
         errors = []
         if not cls.SERPAPI_KEY:
             errors.append("SERPAPI_KEY or SEARCHAPI_KEY not set in .env")
-        if not cls.GROQ_API_KEY:
-            errors.append("GROQ_API_KEY not set in .env")
+        if not cls.GEMINI_API_KEY:
+            errors.append("GEMINI_API_KEY not set in .env")
         return errors
+
+    @classmethod
+    def ensure_store_dirs(cls):
+        """Create storage directories if they don't exist."""
+        for d in (cls.FEEDBACK_STORE_DIR, cls.LTR_STORE_DIR):
+            Path(d).mkdir(parents=True, exist_ok=True)
 
 
 settings = Settings()

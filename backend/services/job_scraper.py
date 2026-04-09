@@ -68,8 +68,14 @@ class JobScraper :
                 if days_old_calc > days_old :
                     continue
 
+                # Stable content-based ID: same job appearing in multiple fetches
+                # gets the same ID so ChromaDB upsert deduplicates correctly.
+                # Previously used int(time.time()) which produced identical IDs
+                # for all jobs in the same batch (loop runs in milliseconds).
+                id_source = f"{title}|{company}|{job.get('location', '')}".lower().strip()
+                job_id = "job_" + hashlib.md5(id_source.encode()).hexdigest()[:20]
                 job_data = {
-                    "id" : f"job_{int( time.time() )}_{idx}_{abs( hash( title + company ) )}",
+                    "id" : job_id,
                     "title" : title,
                     "company" : company,
                     "location" : job.get( "location", location ),

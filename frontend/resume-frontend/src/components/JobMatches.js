@@ -301,7 +301,15 @@ const JobMatches = ({
   const [error, setError]               = useState(null);
   const [stats, setStats]               = useState(null);
   const [signalLog, setSignalLog]       = useState([]); // light audit log for the session
-  const prevJobsRef                     = useRef([]);
+  const prevJobsRef                      = useRef([]);
+
+  // Stable refs for parent callbacks — prevents them from being useCallback deps
+  // and causing an infinite re-render loop when the parent re-renders after
+  // setCareerAdvice is called from inside the effect.
+  const setCareerAdviceRef    = useRef(setCareerAdvice);
+  const setSkillComparisonRef = useRef(setSkillComparison);
+  useEffect(() => { setCareerAdviceRef.current    = setCareerAdvice;    }, [setCareerAdvice]);
+  useEffect(() => { setSkillComparisonRef.current = setSkillComparison; }, [setSkillComparison]);
 
   // Emit scroll_past when user skips a job (i.e. it was in the list but not clicked)
   const handleSignal = (job, signalType) => {
@@ -311,8 +319,8 @@ const JobMatches = ({
   const matchJobs = useCallback(async () => {
     if (!resumeText || !jobQuery) {
       setMatchedJobs([]);
-      if (setCareerAdvice) setCareerAdvice(null);
-      if (setSkillComparison) setSkillComparison(null);
+      setCareerAdviceRef.current?.(null);
+      setSkillComparisonRef.current?.(null);
       return;
     }
 
@@ -354,8 +362,10 @@ const JobMatches = ({
         personalised:  jobs.some(j => j.personalised),
       });
 
-      if (data.career_advice  && setCareerAdvice)   setCareerAdvice(data.career_advice);
-      if (data.skill_comparison && setSkillComparison) setSkillComparison(data.skill_comparison);
+      // Use refs — calling these directly would cause parent re-render → new
+      // function references → matchJobs recreated → useEffect fires again (loop)
+      if (data.career_advice)    setCareerAdviceRef.current?.(data.career_advice);
+      if (data.skill_comparison) setSkillComparisonRef.current?.(data.skill_comparison);
 
     } catch (err) {
       let msg = err.message;
@@ -365,12 +375,14 @@ const JobMatches = ({
         msg = 'Server error. Please check backend logs and ensure all API keys are configured.';
       setError(msg);
       setMatchedJobs([]);
-      if (setCareerAdvice)   setCareerAdvice(null);
-      if (setSkillComparison) setSkillComparison(null);
+      setCareerAdviceRef.current?.(null);
+      setSkillComparisonRef.current?.(null);
     } finally {
       setLoading(false);
     }
-  }, [resumeText, jobQuery, jobLocation, filters, userId, setCareerAdvice, setSkillComparison]);
+  // setCareerAdvice / setSkillComparison intentionally excluded — they are
+  // accessed via stable refs above to prevent an infinite render loop.
+  }, [resumeText, jobQuery, jobLocation, filters, userId]);
 
   useEffect(() => { matchJobs(); }, [matchJobs]);
 

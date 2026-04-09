@@ -1,3 +1,4 @@
+import google.genai as genai
 """
 Market Insights service.
 Uses pytrends (Google Trends) to fetch real trend data for tech skills/roles,
@@ -9,7 +10,6 @@ Rate-limit handling:
   - In-memory cache (TTL = 6 h) so repeated calls for the same keywords
     never hit Google Trends again until the cache expires
 """
-from groq import Groq
 from typing import List, Dict, Optional
 import logging
 import json
@@ -19,6 +19,8 @@ import hashlib
 import threading
 
 from backend.config import settings
+
+_genai_client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
 logger = logging.getLogger(__name__)
 
@@ -157,10 +159,7 @@ def _summarise_trend(values: List[int]) -> Dict:
 
 class MarketInsights:
     def __init__(self):
-        if not settings.GROQ_API_KEY:
-            raise ValueError("GROQ_API_KEY not configured")
-        self.client = Groq(api_key=settings.GROQ_API_KEY)
-        logger.info("MarketInsights initialized with Groq")
+        pass
 
     def get_insights(self, role: str, skills: Optional[List[str]] = None,
                      location: str = "India") -> Dict:
@@ -231,12 +230,15 @@ Be specific, cite the trend data where relevant, and keep each paragraph to 3-4 
 End with 3 bullet-point recommendations for job seekers targeting this role."""
 
         try:
-            response = self.client.chat.completions.create(
-                model=settings.GROQ_SMART_MODEL,
-                max_tokens=settings.MAX_TOKENS_INSIGHTS,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            return response.choices[0].message.content.strip()
+            response = _genai_client.models.generate_content(
+                model=settings.GEMINI_SMART_MODEL,
+                config=genai.types.GenerateContentConfig(
+                    temperature=0.7,
+                    max_output_tokens=settings.MAX_TOKENS_INSIGHTS,
+                ),
+                contents=prompt,
+        )
+            return response.text.strip()
         except Exception as e:
             logger.error(f"Market analysis error: {e}")
             return f"Market analysis for {role} in {location} is currently unavailable. Please try again shortly."

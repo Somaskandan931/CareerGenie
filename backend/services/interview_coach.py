@@ -1,15 +1,17 @@
+import google.genai as genai
 """
 AI Interview Coach service.
 Conducts mock interviews, evaluates answers, and provides structured feedback.
 Supports technical, behavioural, and HR interview modes.
 """
-from groq import Groq
 from typing import List, Dict, Optional
 import logging
 import json
 import re
 
 from backend.config import settings
+
+_genai_client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
 logger = logging.getLogger(__name__)
 
@@ -35,10 +37,7 @@ Rules:
 
 class InterviewCoach:
     def __init__(self):
-        if not settings.GROQ_API_KEY:
-            raise ValueError("GROQ_API_KEY not configured")
-        self.client = Groq(api_key=settings.GROQ_API_KEY)
-        logger.info("InterviewCoach initialized with Groq")
+        pass
 
     def generate_questions(self, role: str, interview_type: str = "mixed",
                             resume_text: Optional[str] = None,
@@ -74,12 +73,15 @@ Respond ONLY with a valid JSON array:
 Mix difficulty levels. Make questions specific to the role. No duplicates."""
 
         try:
-            response = self.client.chat.completions.create(
-                model=settings.GROQ_SMART_MODEL,
-                max_tokens=2000,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            raw = response.choices[0].message.content.strip()
+            response = _genai_client.models.generate_content(
+                model=settings.GEMINI_SMART_MODEL,
+                config=genai.types.GenerateContentConfig(
+                    temperature=0.7,
+                    max_output_tokens=2000,
+                ),
+                contents=prompt,
+        )
+            raw = response.text.strip()
             raw = re.sub(r"^```json\s*", "", raw)
             raw = re.sub(r"\s*```$", "", raw)
             return json.loads(raw)
@@ -114,12 +116,15 @@ Respond ONLY with a valid JSON object:
 Be fair, specific, and constructive."""
 
         try:
-            response = self.client.chat.completions.create(
-                model=settings.GROQ_SMART_MODEL,
-                max_tokens=600,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            raw = response.choices[0].message.content.strip()
+            response = _genai_client.models.generate_content(
+                model=settings.GEMINI_SMART_MODEL,
+                config=genai.types.GenerateContentConfig(
+                    temperature=0.7,
+                    max_output_tokens=600,
+                ),
+                contents=prompt,
+        )
+            raw = response.text.strip()
             raw = re.sub(r"^```json\s*", "", raw)
             raw = re.sub(r"\s*```$", "", raw)
             return json.loads(raw)
@@ -157,12 +162,16 @@ Be fair, specific, and constructive."""
             system += "\n\nStart with a brief welcome, explain the format, then ask your first question."
 
         try:
-            response = self.client.chat.completions.create(
-                model=settings.GROQ_CHAT_MODEL,
-                max_tokens=settings.MAX_TOKENS_CHAT,
-                messages=[{"role": "system", "content": system}] + messages
-            )
-            return response.choices[0].message.content.strip()
+            response = _genai_client.models.generate_content(
+                model=settings.GEMINI_CHAT_MODEL,
+                config=genai.types.GenerateContentConfig(
+                    system_instruction=system,
+                    temperature=0.7,
+                    max_output_tokens=settings.MAX_TOKENS_CHAT,
+                ),
+                contents=prompt,
+        )
+            return response.text.strip()
         except Exception as e:
             logger.error(f"Interview chat error: {e}")
             raise Exception(f"Interview coach unavailable: {str(e)}")

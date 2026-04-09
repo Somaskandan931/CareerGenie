@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Agent Orchestrator
 ==================
@@ -21,7 +22,7 @@ Agents registered here:
 No external agent framework is required — the orchestrator is pure Python
 with a Groq planner call at the top.
 """
-from __future__ import annotations
+import google.genai as genai
 
 import json
 import logging
@@ -30,9 +31,10 @@ import time
 import uuid
 from typing import Any, Callable, Dict, List, Optional
 
-from groq import Groq
 
 from backend.config import settings
+
+_genai_client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
 logger = logging.getLogger(__name__)
 
@@ -79,19 +81,20 @@ class BaseAgent:
 
     def __init__(self, memory: AgentMemory) -> None:
         self.memory = memory
-        self.client = Groq(api_key=settings.GROQ_API_KEY)
 
     def run(self, task: Dict) -> Dict:
         raise NotImplementedError
 
     def _call_llm(self, prompt: str, max_tokens: int = 800, temperature: float = 0.4) -> str:
-        resp = self.client.chat.completions.create(
-            model=settings.GROQ_SMART_MODEL,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            messages=[{"role": "user", "content": prompt}],
+        response = _genai_client.models.generate_content(
+            model=settings.GEMINI_SMART_MODEL,
+            config=genai.types.GenerateContentConfig(
+                temperature=temperature,
+                max_output_tokens=max_tokens,
+            ),
+            contents=prompt,
         )
-        return resp.choices[0].message.content.strip()
+        return response.text.strip()
 
     def _safe_json(self, raw: str) -> Any:
         raw = re.sub(r"^```json\s*", "", raw)
@@ -685,7 +688,6 @@ class AgentOrchestrator:
 
     def plan_from_intent(self, user_intent: str, user_id: str = "") -> Dict:
         """LLM-planned dynamic task decomposition (ReAct planning step)."""
-        client      = Groq(api_key=settings.GROQ_API_KEY)
         agents_desc = "\n".join(
             f"- {name}: actions = {list(AGENT_REGISTRY.keys())}"
             for name in AGENT_REGISTRY
@@ -704,13 +706,15 @@ Return ONLY a JSON array of steps, e.g.:
 Only include steps that are directly relevant. Max 6 steps."""
 
         try:
-            resp = client.chat.completions.create(
-                model=settings.GROQ_SMART_MODEL,
-                max_tokens=400,
-                temperature=0.2,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            raw  = resp.choices[0].message.content.strip()
+            response = _genai_client.models.generate_content(
+                model=settings.GEMINI_SMART_MODEL,
+                config=genai.types.GenerateContentConfig(
+                    temperature=0.2,
+                    max_output_tokens=400,
+                ),
+                contents=prompt,
+        )
+            raw  = response.text.strip()
             raw  = re.sub(r"^```json\s*", "", raw)
             raw  = re.sub(r"\s*```$",     "", raw)
             plan = json.loads(raw)

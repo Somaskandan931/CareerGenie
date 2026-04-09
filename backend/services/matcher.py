@@ -1,3 +1,4 @@
+import google.genai as genai
 """
 matcher.py  (UPGRADED)
 ======================
@@ -10,13 +11,14 @@ Changes from brutal evaluation:
   ✅ component_contributions dict attached to each match for the feedback
      recording endpoint to persist
 """
-from groq import Groq
 from typing import List, Dict, Optional
 import logging
 import re
 from datetime import datetime
 
 from backend.config import settings
+
+_genai_client = genai.Client(api_key=settings.GEMINI_API_KEY)
 from backend.services.vector_store import vector_store
 
 logger = logging.getLogger(__name__)
@@ -24,10 +26,6 @@ logger = logging.getLogger(__name__)
 
 class JobMatcher:
     def __init__(self):
-        if not settings.GROQ_API_KEY:
-            raise ValueError("GROQ_API_KEY not configured")
-        self.client = Groq(api_key=settings.GROQ_API_KEY)
-
         self.skill_patterns = [
             r'\b(python|java|javascript|typescript|c\+\+|c#|ruby|go|rust|php|swift|kotlin)\b',
             r'\b(react|angular|vue|django|flask|fastapi|spring|express|node\.?js)\b',
@@ -263,16 +261,16 @@ Missing Skills: {', '.join(missing_skills[:3]) if missing_skills else 'None'}
 Write 2-3 sentences: what makes this a good/weak match, one gap to address, final action."""
 
         try:
-            resp = self.client.chat.completions.create(
-                model=settings.GROQ_CHAT_MODEL,
-                messages=[
-                    {"role": "system", "content": "You are an expert career advisor."},
-                    {"role": "user",   "content": prompt},
-                ],
-                max_tokens=150,
-                temperature=0.7,
-            )
-            return resp.choices[0].message.content.strip()
+            response = _genai_client.models.generate_content(
+                model=settings.GEMINI_CHAT_MODEL,
+                config=genai.types.GenerateContentConfig(
+                    system_instruction="You are an expert career advisor.",
+                    temperature=0.7,
+                    max_output_tokens=150,
+                ),
+                contents=prompt,
+        )
+            return response.text.strip()
         except Exception as e:
             logger.error(f"Explanation error: {e}")
             return (

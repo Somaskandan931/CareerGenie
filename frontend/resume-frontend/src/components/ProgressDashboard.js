@@ -451,14 +451,28 @@ const ProgressDashboard = ({ importedRoadmap = null, importedProjects = [] }) =>
     try {
       const [sRes, fRes, aRes] = await Promise.all([
         fetch(`${API_BASE_URL}/progress/${USER_ID}/summary`),
-        fetch(`${API_BASE_URL}/progress/${USER_ID}`),
+        fetch(`${API_BASE_URL}/progress/${USER_ID}/full`),
         fetch(`${API_BASE_URL}/progress/${USER_ID}/interviews/analytics`),
       ]);
-      if (sRes.ok) setSummary((await sRes.json()).summary);
-      if (fRes.ok) setFullState((await fRes.json()).data);
-      if (aRes.ok) setAnalytics(await aRes.json());
-    } catch { setSummary(null); setFullState(null); setAnalytics(null); }
-    finally { setLoading(false); }
+      if (sRes.ok) {
+        const sData = await sRes.json();
+        setSummary(sData.summary);
+      }
+      if (fRes.ok) {
+        const fData = await fRes.json();
+        setFullState(fData);
+      }
+      if (aRes.ok) {
+        const aData = await aRes.json();
+        setAnalytics(aData.analytics);
+      }
+    } catch {
+      setSummary(null);
+      setFullState(null);
+      setAnalytics(null);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => { fetchData(); }, [fetchData]);
@@ -480,23 +494,117 @@ const ProgressDashboard = ({ importedRoadmap = null, importedProjects = [] }) =>
   }, [importedProjects, fetchData]);
 
   const handleTaskToggle = async (weekKey, taskId, done) => {
-    if (fullState) { const ns = JSON.parse(JSON.stringify(fullState)); const t = ns.roadmap[weekKey]?.find(t => t.id === taskId); if (t) { t.done = done; setFullState(ns); } }
-    try { await fetch(`${API_BASE_URL}/progress/roadmap/task`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ user_id: USER_ID, week_key: weekKey, task_id: taskId, done }) }); fetchData(); } catch {}
+    if (fullState) {
+      const ns = JSON.parse(JSON.stringify(fullState));
+      const t = ns.roadmap[weekKey]?.find(t => t.id === taskId);
+      if (t) {
+        t.done = done;
+        setFullState(ns);
+      }
+    }
+    try {
+      await fetch(`${API_BASE_URL}/progress/roadmap/task/update`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: USER_ID,
+          week_key: weekKey,
+          task_id: taskId,
+          done
+        })
+      });
+      fetchData();
+    } catch {}
   };
   const handleProjectUpdate = async (projectId, updates) => {
-    if (fullState) { const ns = JSON.parse(JSON.stringify(fullState)); const p = ns.projects?.find(p => p.id === projectId); if (p) { Object.assign(p, updates); setFullState(ns); } }
-    try { await fetch(`${API_BASE_URL}/progress/projects/update`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ user_id: USER_ID, project_id: projectId, ...updates }) }); fetchData(); } catch {}
+    if (fullState) {
+      const ns = JSON.parse(JSON.stringify(fullState));
+      const p = ns.projects?.find(p => p.id === projectId);
+      if (p) {
+        Object.assign(p, updates);
+        setFullState(ns);
+      }
+    }
+    try {
+      await fetch(`${API_BASE_URL}/progress/projects/update`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: USER_ID,
+          project_id: projectId,
+          updates
+        })
+      });
+      fetchData();
+    } catch {}
   };
   const handleDSABulkUpdate = async (topic, solvedCount) => {
-    if (fullState) { const ns = JSON.parse(JSON.stringify(fullState)); if (ns.dsa?.[topic]) { ns.dsa[topic].solved = solvedCount; setFullState(ns); } }
-    try { await fetch(`${API_BASE_URL}/progress/dsa/bulk`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ user_id: USER_ID, topic, solved_count: solvedCount }) }); fetchData(); } catch {}
+    if (fullState) {
+      const ns = JSON.parse(JSON.stringify(fullState));
+      if (ns.dsa?.[topic]) {
+        ns.dsa[topic].solved = solvedCount;
+        setFullState(ns);
+      }
+    }
+    try {
+      await fetch(`${API_BASE_URL}/progress/dsa/bulk-update`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: USER_ID,
+          topic,
+          solved_count: solvedCount
+        })
+      });
+      fetchData();
+    } catch {}
   };
-  const handleAddInterview    = async (company, role, source) => { try { await fetch(`${API_BASE_URL}/progress/interviews/add`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ user_id: USER_ID, company, role, source }) }); fetchData(); } catch {} };
+  const handleAddInterview    = async (company, role, source) => {
+    try {
+      await fetch(`${API_BASE_URL}/progress/interviews/add`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: USER_ID,
+          company,
+          role,
+          source
+        })
+      });
+      fetchData();
+    } catch {}
+  };
   const handleUpdateStage     = async (interviewId, newStage) => {
-    if (fullState) { const ns = JSON.parse(JSON.stringify(fullState)); const iv = ns.interviews?.find(i => i.id === interviewId); if (iv) { iv.current_stage = newStage; setFullState(ns); } }
-    try { await fetch(`${API_BASE_URL}/progress/interviews/stage`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ user_id: USER_ID, interview_id: interviewId, new_stage: newStage }) }); fetchData(); } catch {}
+    if (fullState) {
+      const ns = JSON.parse(JSON.stringify(fullState));
+      const iv = ns.interviews?.find(i => i.id === interviewId);
+      if (iv) {
+        iv.current_stage = newStage;
+        setFullState(ns);
+      }
+    }
+    try {
+      await fetch(`${API_BASE_URL}/progress/interviews/stage`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: USER_ID,
+          interview_id: interviewId,
+          new_stage: newStage,
+          notes: ""
+        })
+      });
+      fetchData();
+    } catch {}
   };
-  const handleDeleteInterview = async (interviewId) => { try { await fetch(`${API_BASE_URL}/progress/${USER_ID}/interviews/${USER_ID}/${interviewId}`, { method: "DELETE" }); fetchData(); } catch {} };
+  const handleDeleteInterview = async (interviewId) => {
+    try {
+      await fetch(`${API_BASE_URL}/progress/interviews/${USER_ID}/${interviewId}`, {
+        method: "DELETE"
+      });
+      fetchData();
+    } catch {}
+  };
 
   const rm = summary?.roadmap; const dsa = summary?.dsa;
   const iv = summary?.interviews; const proj = summary?.projects;

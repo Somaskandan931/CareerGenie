@@ -1,4 +1,4 @@
-from groq import Groq
+import google.genai as genai
 from typing import List, Dict, Optional
 import logging
 import json
@@ -6,14 +6,14 @@ import re
 
 from backend.config import settings
 
+_genai_client = genai.Client(api_key=settings.GEMINI_API_KEY)
+
 logger = logging.getLogger(__name__)
 
 
 class ProjectGenerator:
     def __init__(self):
-        if not settings.GROQ_API_KEY:
-            raise ValueError("GROQ_API_KEY not configured")
-        self.client = Groq(api_key=settings.GROQ_API_KEY)
+        pass
 
     def suggest_projects(self, resume_text: str, target_role: str, skill_gaps: List[str],
                           difficulty: Optional[str] = "intermediate", num_projects: int = 5) -> List[Dict]:
@@ -50,12 +50,15 @@ Suggest {num_projects} hands-on portfolio projects. Respond ONLY with a valid JS
 Make projects SPECIFIC and REAL — no generic to-do apps. Each project should address the skill gaps."""
 
         try:
-            response = self.client.chat.completions.create(
-                model=settings.GROQ_SMART_MODEL,
-                max_tokens=settings.MAX_TOKENS_ROADMAP,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            raw = response.choices[0].message.content.strip()
+            response = _genai_client.models.generate_content(
+                model=settings.GEMINI_SMART_MODEL,
+                config=genai.types.GenerateContentConfig(
+                    temperature=0.7,
+                    max_output_tokens=settings.MAX_TOKENS_ROADMAP,
+                ),
+                contents=prompt,
+        )
+            raw = response.text.strip()
             raw = re.sub(r"^```json\s*", "", raw)
             raw = re.sub(r"\s*```$", "", raw)
             projects = json.loads(raw)

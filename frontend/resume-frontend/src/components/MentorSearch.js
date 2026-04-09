@@ -404,7 +404,7 @@ const BookingModal = ({ mentor, onClose, onConfirm, userId = "default_user" }) =
 
 // ─── My Sessions Panel ─────────────────────────────────────────────────────
 
-const MySessions = ({ sessions = [], onRefresh }) => {
+const MySessions = ({ sessions = [], onRefresh, userId = "default_user" }) => {
   const [loading, setLoading] = useState({});
 
   const cancelSession = async (sessionId) => {
@@ -412,7 +412,7 @@ const MySessions = ({ sessions = [], onRefresh }) => {
 
     setLoading({ ...loading, [sessionId]: true });
     try {
-      const res = await fetch(`${API_BASE_URL}/mentors/sessions/${sessionId}/cancel?user_id=default_user`, {
+      const res = await fetch(`${API_BASE_URL}/mentors/sessions/${sessionId}/cancel?user_id=${userId}`, {
         method: "POST"
       });
       if (!res.ok) throw new Error("Cancellation failed");
@@ -750,6 +750,7 @@ const MentorSearch = ({ userId = "default_user", userSkills = [] }) => {
           <h2 className="text-lg font-bold text-gray-900 dark:text-white mb-4">Your Sessions</h2>
           <MySessions
             sessions={userSessions}
+            userId={userId}
             onRefresh={() => {
               fetch(`${API_BASE_URL}/mentors/sessions/${userId}`)
                 .then(res => res.json())

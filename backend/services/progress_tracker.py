@@ -214,7 +214,7 @@ class ProgressTracker:
                 "rejections":    rejections,
                 "active":        len(interviews) - offers - rejections,
                 "funnel":        funnel,
-                "success_rate":  round(offers / len(interviews) * 100, 1) if interviews else 0,
+                "offer_rate":    round(offers / len(interviews) * 100, 1) if interviews else 0,
             },
             "activity_log": activity[-365:],
             # NEW fields
@@ -271,7 +271,16 @@ class ProgressTracker:
         _save(user_id, state)
         return {"imported": total_tasks, "weeks": len(weeks)}
 
-    def update_task(self, user_id: str, task_id: str, done: bool) -> Dict:
+    def get_roadmap_with_progress(self, user_id: str) -> Dict:
+        """
+        Return the stored roadmap dict keyed by week_key.
+        Each value is a list of task dicts (with id, topic, done, hours, etc.).
+        Called by main.py after import, on /roadmap GET, and in /full.
+        """
+        state = _load(user_id)
+        return state.get("roadmap", {})
+
+    def update_task(self, user_id: str, week_key: str, task_id: str, done: bool) -> Dict:
         state = _load(user_id)
         for week_tasks in state.get("roadmap", {}).values():
             for task in week_tasks:
