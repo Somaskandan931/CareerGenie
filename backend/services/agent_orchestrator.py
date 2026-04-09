@@ -22,7 +22,6 @@ Agents registered here:
 No external agent framework is required — the orchestrator is pure Python
 with a Groq planner call at the top.
 """
-import google.genai as genai
 
 import json
 import logging
@@ -33,8 +32,8 @@ from typing import Any, Callable, Dict, List, Optional
 
 
 from backend.config import settings
+from backend.services.llm import llm_call_sync, llm_call_smart_sync
 
-_genai_client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
 logger = logging.getLogger(__name__)
 
@@ -86,15 +85,12 @@ class BaseAgent:
         raise NotImplementedError
 
     def _call_llm(self, prompt: str, max_tokens: int = 800, temperature: float = 0.4) -> str:
-        response = _genai_client.models.generate_content(
-            model=settings.GEMINI_SMART_MODEL,
-            config=genai.types.GenerateContentConfig(
-                temperature=temperature,
-                max_output_tokens=max_tokens,
-            ),
-            contents=prompt,
+        return llm_call_sync(
+            system="You are an expert AI assistant. Respond clearly and concisely.",
+            user=prompt,
+            temp=temperature,
+            max_tokens=max_tokens,
         )
-        return response.text.strip()
 
     def _safe_json(self, raw: str) -> Any:
         raw = re.sub(r"^```json\s*", "", raw)
@@ -706,15 +702,12 @@ Return ONLY a JSON array of steps, e.g.:
 Only include steps that are directly relevant. Max 6 steps."""
 
         try:
-            response = _genai_client.models.generate_content(
-                model=settings.GEMINI_SMART_MODEL,
-                config=genai.types.GenerateContentConfig(
-                    temperature=0.2,
-                    max_output_tokens=400,
-                ),
-                contents=prompt,
-        )
-            raw  = response.text.strip()
+            raw = llm_call_sync(
+                system="You are an expert AI assistant. Respond clearly and concisely.",
+                user=prompt,
+                temp=0.2,
+                max_tokens=400,
+            )
             raw  = re.sub(r"^```json\s*", "", raw)
             raw  = re.sub(r"\s*```$",     "", raw)
             plan = json.loads(raw)

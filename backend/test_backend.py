@@ -56,20 +56,20 @@ def test_env_file () :
     load_dotenv( env_path )
 
     serpapi_key = os.getenv( "SERPAPI_KEY" ) or os.getenv( "SEARCHAPI_KEY" )
-    anthropic_key = os.getenv( "ANTHROPIC_API_KEY" )
+    gemini_key = os.getenv( "GEMINI_API_KEY" )
 
     all_good = True
 
     if serpapi_key :
         print( f"  ✅ SERPAPI_KEY found (length: {len( serpapi_key )})" )
     else :
-        print( "  ❌ SERPAPI_KEY not set in .env" )
+        print( "  ❌ SERPAPI_KEY not set in .env — get a free key at https://serpapi.com" )
         all_good = False
 
-    if anthropic_key :
-        print( f"  ✅ ANTHROPIC_API_KEY found (length: {len( anthropic_key )})" )
+    if gemini_key :
+        print( f"  ✅ GEMINI_API_KEY found (length: {len( gemini_key )})" )
     else :
-        print( "  ❌ ANTHROPIC_API_KEY not set in .env" )
+        print( "  ❌ GEMINI_API_KEY not set in .env — get a free key at https://aistudio.google.com" )
         all_good = False
 
     return all_good

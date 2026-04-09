@@ -1,12 +1,11 @@
-import google.genai as genai
 from typing import List, Dict, Optional
 import logging
 import json
 import re
 
 from backend.config import settings
+from backend.services.llm import llm_call_sync, llm_call_smart_sync
 
-_genai_client = genai.Client( api_key=settings.GEMINI_API_KEY )
 
 logger = logging.getLogger( __name__ )
 
@@ -107,15 +106,12 @@ Scoring guide:
 Be specific, actionable, and honest. Reference actual content from the resume."""
 
         try :
-            response = _genai_client.models.generate_content(
-                model=settings.GEMINI_SMART_MODEL,
-                config=genai.types.GenerateContentConfig(
-                    temperature=0.3,
-                    max_output_tokens=settings.MAX_TOKENS_CAREER_ADVICE,
-                ),
-                contents=prompt,
+            raw = llm_call_sync(
+                system="You are an expert AI assistant. Respond clearly and concisely.",
+                user=prompt,
+                temp=0.3,
+                max_tokens=settings.MAX_TOKENS_CAREER_ADVICE,
             )
-            raw = response.text.strip()
             # Strip markdown fences if present
             raw = re.sub( r"^```json\s*", "", raw )
             raw = re.sub( r"^```\s*", "", raw )

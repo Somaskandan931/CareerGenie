@@ -7,17 +7,8 @@ Implements:
   1. Relevance scoring   — cosine similarity between query embedding and each
                            agent response embedding (how on-topic is the answer?)
   2. Diversity scoring   — penalise responses that are too similar to each other
-                           (rewards unique perspectives from different proposers)
-  3. Weighted voting     — combines relevance + diversity into a final per-agent
-                           weight used by the synthesizer
+  3. Weighted voting     — combines relevance + diversity into a final per-agent weight
   4. Winner selection    — pick the highest-scoring proposal as the base answer
-
-Uses the same SentenceTransformer model already loaded by vector_store.py
-(all-MiniLM-L6-v2) — no new model is downloaded.
-
-Design note:
-  Scoring is synchronous and CPU-bound. It's fast enough (~10ms for 3 proposals)
-  that it doesn't need async treatment.
 """
 from __future__ import annotations
 
@@ -28,19 +19,34 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# ── Lazy model loading — reuses the same model as vector_store ─────────────────
+# ── Lazy model loading — tries Ollama first, then SentenceTransformer ─────────
 _model = None
 
 def _get_model():
     global _model
-    if _model is None:
-        try:
-            from sentence_transformers import SentenceTransformer
-            _model = SentenceTransformer("all-MiniLM-L6-v2")
-            logger.info("Scoring: SentenceTransformer loaded")
-        except Exception as e:
-            logger.warning(f"Scoring: SentenceTransformer unavailable ({e}) — falling back to length heuristic")
-    return _model
+    if _model is not None:
+        return _model
+
+    # Try Ollama first
+    try:
+        from backend.services.ollama_service import get_ollama_service
+        _model = get_ollama_service()
+        if _model and _model.available:
+            logger.info("Scoring: Ollama embedder loaded")
+            return _model
+    except Exception as e:
+        logger.warning(f"Scoring: Ollama unavailable ({e})")
+
+    # Fallback to SentenceTransformer
+    try:
+        from sentence_transformers import SentenceTransformer
+        _model = SentenceTransformer("all-MiniLM-L6-v2")
+        logger.info("Scoring: SentenceTransformer loaded")
+        return _model
+    except Exception as e:
+        logger.warning(f"Scoring: SentenceTransformer unavailable ({e}) — falling back to length heuristic")
+
+    return None
 
 
 def _cosine(a: np.ndarray, b: np.ndarray) -> float:
@@ -48,17 +54,30 @@ def _cosine(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b) / denom) if denom > 0 else 0.0
 
 
+def _get_embedding(model, text: str) -> np.ndarray:
+    """Get embedding from either Ollama or SentenceTransformer"""
+    if hasattr(model, 'get_embedding'):
+        # Ollama
+        emb = model.get_embedding(text)
+        return np.array(emb)
+    else:
+        # SentenceTransformer
+        return model.encode([text])[0]
+
+
+def _get_embeddings(model, texts: List[str]) -> np.ndarray:
+    """Get embeddings for multiple texts"""
+    if hasattr(model, 'get_embeddings'):
+        # Ollama
+        return model.get_embeddings(texts)
+    else:
+        # SentenceTransformer
+        return model.encode(texts)
+
+
 def score_responses(query: str, responses: Dict[str, str]) -> Dict[str, float]:
     """
     Score each agent response against the query using cosine similarity.
-
-    Args:
-        query:     The original user query / topic.
-        responses: {agent_name: response_text} dict from the proposer round.
-
-    Returns:
-        {agent_name: score}  where score ∈ [0, 1].
-        Higher = more relevant to the query.
     """
     if not responses:
         return {}
@@ -66,17 +85,22 @@ def score_responses(query: str, responses: Dict[str, str]) -> Dict[str, float]:
     model = _get_model()
 
     if model is None:
-        # Fallback: score by response length (longer = more detailed = higher score)
-        # Normalised to [0, 1]
+        # Fallback: score by response length
         lengths = {k: len(v) for k, v in responses.items()}
         max_len = max(lengths.values()) or 1
         return {k: round(v / max_len, 3) for k, v in lengths.items()}
 
     try:
-        texts  = [query] + list(responses.values())
-        embeds = model.encode(texts, convert_to_numpy=True)
-        q_emb  = embeds[0]
-        r_embs = embeds[1:]
+        texts = [query] + list(responses.values())
+
+        if hasattr(model, 'get_embeddings'):
+            embeds = model.get_embeddings(texts)
+            q_emb = embeds[0]
+            r_embs = embeds[1:]
+        else:
+            embeds = model.encode(texts)
+            q_emb = embeds[0]
+            r_embs = embeds[1:]
 
         scores = {}
         for i, agent_name in enumerate(responses):
@@ -90,13 +114,7 @@ def score_responses(query: str, responses: Dict[str, str]) -> Dict[str, float]:
 
 def diversity_penalty(responses: Dict[str, str]) -> Dict[str, float]:
     """
-    Compute a diversity score for each agent — higher means the response is
-    more distinct from the others (penalises copy-paste or near-identical outputs).
-
-    Returns:
-        {agent_name: diversity_score}  ∈ [0, 1]
-        1.0 = maximally different from all others
-        0.0 = identical to another response
+    Compute a diversity score for each agent.
     """
     if len(responses) < 2:
         return {k: 1.0 for k in responses}
@@ -106,19 +124,22 @@ def diversity_penalty(responses: Dict[str, str]) -> Dict[str, float]:
         return {k: 1.0 for k in responses}
 
     try:
-        names  = list(responses.keys())
-        texts  = list(responses.values())
-        embeds = model.encode(texts, convert_to_numpy=True)
+        names = list(responses.keys())
+        texts = list(responses.values())
+
+        if hasattr(model, 'get_embeddings'):
+            embeds = model.get_embeddings(texts)
+        else:
+            embeds = model.encode(texts)
 
         diversity: Dict[str, float] = {}
         for i, name in enumerate(names):
-            # Average cosine similarity to all OTHER responses
             sims = [
                 _cosine(embeds[i], embeds[j])
                 for j in range(len(names)) if j != i
             ]
             avg_sim = sum(sims) / len(sims) if sims else 0.0
-            diversity[name] = round(1.0 - avg_sim, 4)  # higher = more diverse
+            diversity[name] = round(1.0 - avg_sim, 4)
         return diversity
 
     except Exception as e:
@@ -134,19 +155,9 @@ def weighted_vote(
 ) -> Tuple[Dict[str, float], str]:
     """
     Combine relevance and diversity into a final vote score per agent.
-    Returns the combined scores dict and the name of the winning agent.
-
-    Args:
-        query:             Original query.
-        responses:         {agent_name: response_text}.
-        relevance_weight:  Weight given to query relevance (default 0.7).
-        diversity_weight:  Weight given to diversity from peers (default 0.3).
-
-    Returns:
-        (scores_dict, winner_agent_name)
     """
-    rel   = score_responses(query, responses)
-    div   = diversity_penalty(responses)
+    rel = score_responses(query, responses)
+    div = diversity_penalty(responses)
 
     combined: Dict[str, float] = {}
     for name in responses:

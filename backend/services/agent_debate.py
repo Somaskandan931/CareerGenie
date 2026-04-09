@@ -28,7 +28,6 @@ This is the architecture pattern used in:
 
 We implement it with Groq as the underlying model, no extra frameworks.
 """
-import google.genai as genai
 
 import json
 import logging
@@ -38,8 +37,8 @@ from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional, Tuple
 
 from backend.config import settings
+from backend.services.llm import llm_call_sync, llm_call_smart_sync
 
-_genai_client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
 logger = logging.getLogger(__name__)
 
@@ -87,16 +86,12 @@ class DebateAgent:
         self.persona  = persona
 
     def _call(self, prompt: str, max_tokens: int = 800, temp: float = 0.7) -> str:
-        response = _genai_client.models.generate_content(
-            model=settings.GEMINI_SMART_MODEL,
-            config=genai.types.GenerateContentConfig(
-                system_instruction=self.persona,
-                temperature=temp,
-                max_output_tokens=max_tokens,
-            ),
-            contents=prompt,
+        return llm_call_sync(
+            system=self.persona,
+            user=prompt,
+            temp=temp,
+            max_tokens=max_tokens,
         )
-        return response.text.strip()
 
     def _parse_json(self, raw: str) -> Any:
         raw = re.sub(r"^```json\s*", "", raw)
@@ -308,15 +303,12 @@ Honestly assess your output. Return ONLY valid JSON:
   "retry_hint": "<what to do differently if retrying>"
 }}"""
         try:
-            response = _genai_client.models.generate_content(
-                model=settings.GEMINI_SMART_MODEL,
-                config=genai.types.GenerateContentConfig(
-                    temperature=0.2,
-                    max_output_tokens=300,
-                ),
-                contents=prompt,
-        )
-            raw  = response.text.strip()
+            raw = llm_call_sync(
+                system="You are an expert AI assistant. Respond clearly and concisely.",
+                user=prompt,
+                temp=0.2,
+                max_tokens=300,
+            )
             raw  = re.sub(r"^```json\s*", "", raw)
             raw  = re.sub(r"\s*```$",     "", raw)
             data = json.loads(raw)

@@ -1,4 +1,3 @@
-import google.genai as genai
 """
 matcher.py  (UPGRADED)
 ======================
@@ -10,6 +9,7 @@ Changes from brutal evaluation:
   ✅ Cold-start handled transparently (falls back to prior weights)
   ✅ component_contributions dict attached to each match for the feedback
      recording endpoint to persist
+  ✅ Uses llm.py waterfall (Groq → Anthropic → Gemini) — no direct SDK calls
 """
 from typing import List, Dict, Optional
 import logging
@@ -17,8 +17,7 @@ import re
 from datetime import datetime
 
 from backend.config import settings
-
-_genai_client = genai.Client(api_key=settings.GEMINI_API_KEY)
+from backend.services.llm import llm_call_sync
 from backend.services.vector_store import vector_store
 
 logger = logging.getLogger(__name__)
@@ -261,16 +260,12 @@ Missing Skills: {', '.join(missing_skills[:3]) if missing_skills else 'None'}
 Write 2-3 sentences: what makes this a good/weak match, one gap to address, final action."""
 
         try:
-            response = _genai_client.models.generate_content(
-                model=settings.GEMINI_CHAT_MODEL,
-                config=genai.types.GenerateContentConfig(
-                    system_instruction="You are an expert career advisor.",
-                    temperature=0.7,
-                    max_output_tokens=150,
-                ),
-                contents=prompt,
-        )
-            return response.text.strip()
+            return llm_call_sync(
+                system="You are an expert career advisor.",
+                user=prompt,
+                temp=0.7,
+                max_tokens=150,
+            )
         except Exception as e:
             logger.error(f"Explanation error: {e}")
             return (

@@ -1,9 +1,9 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any, Tuple
 import tempfile
-import google.genai as genai
 import os
 import logging
 from pathlib import Path
@@ -11,7 +11,57 @@ from datetime import datetime
 
 from backend.config import settings
 
-_genai_client = genai.Client( api_key=settings.GEMINI_API_KEY )
+# Add these imports at the top if not already present
+import hashlib
+import threading
+import asyncio
+from functools import wraps
+from collections import defaultdict
+
+# ── Request deduplication for job matching ────────────────────────────────────
+_pending_job_matches: Dict[str, asyncio.Future] = {}
+_pending_lock = threading.Lock()
+
+
+def deduplicate_job_matches ( func ) :
+    """Decorator to prevent duplicate concurrent job match requests."""
+
+    @wraps( func )
+    async def wrapper ( request, *args, **kwargs ) :
+        # Create a unique key for this request
+        key_data = f"{request.resume_text[:500]}|{request.job_query}|{request.location}|{request.user_id}"
+        key = hashlib.md5( key_data.encode() ).hexdigest()
+
+        with _pending_lock :
+            if key in _pending_job_matches :
+                logger.info( f"Deduplicating job match request: {key[:8]}" )
+                return await _pending_job_matches[key]
+
+            # Create a future for this request
+            future = asyncio.Future()
+            _pending_job_matches[key] = future
+
+        try :
+            result = await func( request, *args, **kwargs )
+            future.set_result( result )
+            return result
+        except Exception as e :
+            future.set_exception( e )
+            raise
+        finally :
+            with _pending_lock :
+                _pending_job_matches.pop( key, None )
+
+    return wrapper
+
+# ── Gemini client (google-genai SDK) ─────────────────────────────────────────
+try:
+    from google import genai
+    _genai_client = genai.Client(api_key=settings.GEMINI_API_KEY) if settings.GEMINI_API_KEY else None
+except Exception as _genai_err:
+    _genai_client = None
+    genai = None
+    logging.warning(f"google-genai not available: {_genai_err}. Run: pip install google-genai")
 from backend.models import (
     ResumeUploadResponse, JobMatchRequest, JobMatchResponse,
     ConfigResponse, JobMatch,
@@ -75,13 +125,54 @@ import hashlib
 #    the same resume+query pair
 _advice_cache: dict = {}
 
+
+# ============================================================================
+# LIFESPAN  — must be defined BEFORE app = FastAPI(lifespan=lifespan)
+# ============================================================================
+
+@asynccontextmanager
+async def lifespan ( app: FastAPI ) :
+    # ── Startup ──────────────────────────────────────────────────────────────
+    logger.info( "=" * 60 )
+    logger.info( "Career Genie – TN AUTO SkillBridge v4.1" )
+    logger.info( "=" * 60 )
+
+    settings.ensure_store_dirs()
+    Path( settings.CHROMA_PERSIST_DIR ).mkdir( parents=True, exist_ok=True )
+
+    for err in settings.validate() :
+        logger.error( f"  ❌ {err}" )
+    if not settings.validate() :
+        logger.info( "✅ All configurations valid" )
+
+    if _genai_client is None :
+        logger.error( "❌ Gemini client NOT initialized — check GEMINI_API_KEY and 'pip install google-genai'" )
+    else :
+        logger.info( "✅ Gemini client initialized" )
+
+    logger.info( f"✅ TN taxonomy: {len( tn_extractor.skill_db )} skills · {len( tn_extractor.job_roles )} roles" )
+
+    stats = vector_store.get_stats()
+    logger.info(
+        f"✅ Vector store: {stats['total_jobs']} jobs indexed · freshness: {stats.get( 'freshness', 'unknown' )}" )
+
+    logger.info( "✅ Engines ready: Feedback · LTR · Agent Orchestrator · Agent Debate · Uncertainty Handler" )
+    logger.info( "=" * 60 )
+
+    yield  # ← app runs here
+
+    # ── Shutdown ──────────────────────────────────────────────────────────────
+    logger.info( "Career Genie shutting down." )
+
+
 app = FastAPI(
     title="Career Genie – TN AUTO SkillBridge",
     description=(
         "AI-powered workforce analytics · Job Coach · Market Insights · "
         "Interview Coach · Resume Rewriter · Agent Debate · Learning-to-Rank"
     ),
-    version="4.1.0"
+    version="4.1.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -253,8 +344,9 @@ def get_config () :
     return ConfigResponse(
         serpapi_key_present=bool( settings.SERPAPI_KEY ),
         searchapi_key_present=bool( settings.SERPAPI_KEY ),
-        anthropic_key_present=bool( settings.GEMINI_API_KEY ),
-        groq_key_present=bool( settings.GEMINI_API_KEY ),
+        groq_key_present=bool( settings.GROQ_API_KEY ),
+        anthropic_key_present=bool( settings.ANTHROPIC_API_KEY ),
+        gemini_key_present=bool( settings.GEMINI_API_KEY ),
         vector_db_initialized=True,
         total_indexed_jobs=vector_store.collection.count()
     )
@@ -302,7 +394,8 @@ async def parse_resume ( file: UploadFile = File( ... ) ) :
 # ============================================================================
 
 @app.post( "/rag/match-realtime", response_model=JobMatchResponse )
-def match_jobs_realtime ( request: JobMatchRequest ) :
+@deduplicate_job_matches
+async def match_jobs_realtime ( request: JobMatchRequest ) :
     if not request.resume_text.strip() :
         raise HTTPException( status_code=400, detail="Resume text is required" )
     if not request.job_query.strip() :
@@ -311,11 +404,17 @@ def match_jobs_realtime ( request: JobMatchRequest ) :
     force_refresh = request.force_refresh
 
     try :
-        jobs = get_job_scraper().fetch_jobs(
-            query=request.job_query,
-            location=request.location,
-            num_jobs=request.num_jobs,
-            days_old=7
+        loop = asyncio.get_event_loop()
+
+        # Fetch jobs
+        jobs = await loop.run_in_executor(
+            None,
+            lambda : get_job_scraper().fetch_jobs(
+                query=request.job_query,
+                location=request.location,
+                num_jobs=request.num_jobs,
+                days_old=7
+            )
         )
 
         if not jobs :
@@ -324,6 +423,7 @@ def match_jobs_realtime ( request: JobMatchRequest ) :
                 search_query=f"{request.job_query} in {request.location}"
             )
 
+        # Filter jobs
         try :
             from backend.services.job_filter import SmartJobFilter
             filtered = SmartJobFilter().filter_jobs(
@@ -338,28 +438,36 @@ def match_jobs_realtime ( request: JobMatchRequest ) :
             jobs_to_index = jobs
 
         if force_refresh :
-            vector_store.clear()
+            await loop.run_in_executor( None, vector_store.clear )
 
-        indexed_count = vector_store.index_jobs( jobs_to_index )
+        indexed_count = await loop.run_in_executor(
+            None, lambda : vector_store.index_jobs( jobs_to_index )
+        )
+
         if indexed_count == 0 :
             raise HTTPException( status_code=500, detail="Failed to index jobs" )
 
-        matches = get_job_matcher().match_resume_to_jobs(
-            resume_text=request.resume_text,
-            top_k=request.top_k,
-            force_refresh=False,
-            location=request.location,
-            user_id=request.user_id,
+        matches = await loop.run_in_executor(
+            None,
+            lambda : get_job_matcher().match_resume_to_jobs(
+                resume_text=request.resume_text,
+                top_k=request.top_k,
+                force_refresh=False,
+                location=request.location,
+                user_id=request.user_id,
+            )
         )
 
-        # Uncertainty check on match results
-        try :
-            uh = get_uncertainty_handler()
-            _, match_report = uh.wrap_matches( matches )
-            if match_report.should_retry :
-                logger.warning( f"Match confidence low: {match_report.issues}" )
-        except Exception :
-            pass
+        # Deduplicate matches by job_id
+        seen_ids = set()
+        unique_matches = []
+        for match in matches :
+            job_id = match.get( "job_id" )
+            if job_id and job_id not in seen_ids :
+                seen_ids.add( job_id )
+                unique_matches.append( match )
+
+        matches = unique_matches
 
         # Career advice — served from cache when possible
         career_advice_data = None
@@ -438,8 +546,6 @@ def match_jobs_realtime ( request: JobMatchRequest ) :
     except Exception as e :
         logger.error( f"Job matching error: {e}", exc_info=True )
         raise HTTPException( status_code=500, detail=f"Job matching failed: {e}" )
-
-
 # ============================================================================
 # FEEDBACK ENGINE  (/feedback/record and /feedback/stats)
 # ============================================================================
@@ -1112,26 +1218,16 @@ Produce a JSON hiring assessment. Return ONLY valid JSON, no markdown:
 }}"""
 
     try :
-        response = _genai_client.models.generate_content(
-            model=settings.GEMINI_SMART_MODEL,
-            config=genai.types.GenerateContentConfig(
-                temperature=0.4,
-                max_output_tokens=2000,
-            ),
-            contents=prompt,
+        from backend.services.llm import llm_json
+        result = llm_json(
+            system="You are an expert HR recruiter. Always respond with valid JSON only.",
+            user=prompt,
+            temp=0.4,
+            max_tokens=2000,
         )
-        raw = response.text.strip()
-        raw = _re.sub( r"^```json\s*", "", raw )
-        raw = _re.sub( r"^```\s*", "", raw )
-        raw = _re.sub( r"\s*```$", "", raw )
-
-        # Fix common JSON issues before parsing
-        raw = _fix_json_string_hr( raw )
-
-        return _json.loads( raw )
+        return result
     except _json.JSONDecodeError as e :
-        logger.error( f"HR panel JSON parse error at line {e.lineno}, col {e.colno}: {e.msg}" )
-        logger.error( f"Problematic JSON (first 500 chars): {raw[:500] if 'raw' in locals() else 'No response'}" )
+        logger.error( f"HR panel JSON parse error: {e}" )
         return _get_fallback_hr_panel( target_role, company_type, focus_area, job_description )
     except Exception as e :
         logger.error( f"HR panel error: {e}" )
@@ -1454,17 +1550,19 @@ def health_check () :
             "vector_store" : "ok",
             "job_scraper" : "ok" if settings.SERPAPI_KEY else "missing_api_key",
             "career_advisor" : "ok" if career_advisor else "not_initialized",
-            "claude_llm" : "ok" if settings.GEMINI_API_KEY else "missing_api_key",
-            "job_coach" : "ok" if settings.GEMINI_API_KEY else "missing_api_key",
-            "market_insights" : "ok" if settings.GEMINI_API_KEY else "missing_api_key",
-            "interview_coach" : "ok" if settings.GEMINI_API_KEY else "missing_api_key",
+            "groq_llm" : "ok" if settings.GROQ_API_KEY else "missing_api_key",
+            "anthropic_llm" : "ok" if settings.ANTHROPIC_API_KEY else "missing_api_key",
+            "gemini_llm" : "ok (tertiary)" if settings.GEMINI_API_KEY else "not configured (optional)",
+            "job_coach" : "ok" if (settings.GROQ_API_KEY or settings.ANTHROPIC_API_KEY) else "missing_api_key",
+            "market_insights" : "ok" if (settings.GROQ_API_KEY or settings.ANTHROPIC_API_KEY) else "missing_api_key",
+            "interview_coach" : "ok" if (settings.GROQ_API_KEY or settings.ANTHROPIC_API_KEY) else "missing_api_key",
             "progress_tracker" : "ok",
             "resume_rewriter" : "ok" if resume_rewriter else "not_initialized",
             "tn_automotive_taxonomy" : f"ok — {len( tn_extractor.skill_db )} skills",
             "feedback_engine" : "ok" if fe_ok else "failed",
             "learning_to_rank" : "ok" if ltr_ok else "failed",
-            "agent_orchestrator" : "ok" if settings.GEMINI_API_KEY else "missing_api_key",
-            "agent_debate" : "ok" if settings.GEMINI_API_KEY else "missing_api_key",
+            "agent_orchestrator" : "ok" if (settings.GROQ_API_KEY or settings.ANTHROPIC_API_KEY) else "missing_api_key",
+            "agent_debate" : "ok" if (settings.GROQ_API_KEY or settings.ANTHROPIC_API_KEY) else "missing_api_key",
         }
     }
 
@@ -1664,39 +1762,6 @@ def _build_nsqf_summary ( extracted_skills: List[Dict] ) -> Dict :
     peak = max( dist.keys() )
     return {"peak_level" : peak, "peak_label" : NSQF_LEVELS[peak]["label"],
             "distribution" : {NSQF_LEVELS[lvl]["label"] : skills for lvl, skills in sorted( dist.items() )}}
-
-
-# ============================================================================
-# STARTUP
-# ============================================================================
-
-@app.on_event( "startup" )
-async def startup_event () :
-    logger.info( "=" * 60 )
-    logger.info( "Career Genie – TN AUTO SkillBridge v4.1" )
-    logger.info( "=" * 60 )
-
-    # Ensure storage directories exist
-    settings.ensure_store_dirs()
-    Path( settings.CHROMA_PERSIST_DIR ).mkdir( parents=True, exist_ok=True )
-
-    for err in settings.validate() :
-        logger.error( f"  ❌ {err}" )
-    if not settings.validate() :
-        logger.info( "✅ All configurations valid" )
-
-    logger.info( f"✅ TN taxonomy: {len( tn_extractor.skill_db )} skills · {len( tn_extractor.job_roles )} roles" )
-
-    stats = vector_store.get_stats()
-    logger.info(
-        f"✅ Vector store: {stats['total_jobs']} jobs indexed · freshness: {stats.get( 'freshness', 'unknown' )}" )
-
-    logger.info(
-        "✅ New engines: Feedback Engine · Learning-to-Rank · Agent Orchestrator · Agent Debate · Uncertainty Handler" )
-    logger.info(
-        "✅ God-mode: Async LLM · State Manager · RAG Retriever · Scoring · Confidence · Consistency · Tools · /ask" )
-    logger.info( "=" * 60 )
-
 
 if __name__ == "__main__" :
     import uvicorn

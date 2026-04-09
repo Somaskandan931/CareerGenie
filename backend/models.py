@@ -107,8 +107,9 @@ class JobMatchResponse(BaseModel):
 class ConfigResponse(BaseModel):
     serpapi_key_present: bool
     searchapi_key_present: bool
-    anthropic_key_present: bool
-    groq_key_present: bool = False
+    groq_key_present: bool            # primary LLM provider
+    anthropic_key_present: bool       # secondary LLM provider
+    gemini_key_present: bool          # tertiary LLM provider
     vector_db_initialized: bool
     total_indexed_jobs: int
 

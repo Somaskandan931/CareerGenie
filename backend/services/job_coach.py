@@ -1,73 +1,86 @@
-import google.genai as genai
 """
-Job Coach / Career Counsellor chatbot service.
-Maintains conversation history per session and answers career questions
-using the candidate's resume as context.
+services/job_coach.py  —  Stateless conversational career coach ("Genie")
+=========================================================================
+Uses llm.py — never calls any LLM SDK directly.
+Provider waterfall handled automatically: Groq → Anthropic → Gemini
 """
-from typing import List, Dict, Optional
+
+from __future__ import annotations
+
 import logging
+from typing import List, Dict, Optional
 
+from backend.services.llm import llm_call_sync
 from backend.config import settings
-
-_genai_client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """You are an experienced, empathetic career coach and counsellor named "Genie".
-You help job seekers with:
-- Career decisions and role transitions
-- Resume and cover letter advice
-- Salary negotiation strategies
-- Interview preparation tips
-- How to approach skill gaps
-- Job search strategies and networking
-- Work-life balance and career growth planning
+_SYSTEM_PROMPT = """You are Genie, an expert AI career coach specialising in
+the Indian job market — especially tech, automotive, EV, and manufacturing roles
+in Tamil Nadu and across India.
 
-You are supportive, direct, and practical. Give specific, actionable advice.
-When the user shares their resume or background, personalise your advice to their situation.
-Keep responses concise (3-5 sentences unless a detailed explanation is needed).
-Never make up job listings or company-specific salary data — give ranges instead."""
+Your job is to give specific, actionable career advice. Guidelines:
+- Be direct and practical. No generic platitudes.
+- Tailor every answer to the candidate's resume and situation when provided.
+- Cover: resume tips, salary negotiation, skill gaps, role transitions,
+  interview prep, job search strategy, LinkedIn optimisation.
+- Keep replies to 3-5 sentences unless the question genuinely needs more depth.
+- Use bullet points only when listing steps or options — otherwise use prose.
+- Never say "I cannot help with that." Always give the best answer you can.
+- If the resume is provided, reference specific skills or experience from it.
+"""
 
 
 class JobCoach:
-    def __init__(self):
-        pass
+    def chat(
+        self,
+        messages:    List[Dict[str, str]],
+        resume_text: Optional[str] = None,
+    ) -> str:
+        if not messages:
+            raise ValueError("messages list is empty")
 
-    def chat(self, messages: List[Dict], resume_text: Optional[str] = None) -> str:
-        """
-        Send a message to the job coach.
-
-        Args:
-            messages: List of {"role": "user"|"assistant", "content": str}
-            resume_text: Optional resume context to include in system prompt
-
-        Returns:
-            Coach's reply as a string
-        """
-        system = SYSTEM_PROMPT
+        context_parts = []
         if resume_text and resume_text.strip():
-            system += f"\n\nCandidate's resume context:\n{resume_text[:1500]}"
+            context_parts.append(
+                f"Candidate resume (excerpt):\n{resume_text.strip()[:1500]}"
+            )
 
-        try:
-            response = _genai_client.models.generate_content(
-                model=settings.GEMINI_CHAT_MODEL,
-                config=genai.types.GenerateContentConfig(
-                    system_instruction=system,
-                    temperature=0.7,
-                    max_output_tokens=settings.MAX_TOKENS_CHAT,
-                ),
-                contents=prompt,
-        )
-            return response.text.strip()
-        except Exception as e:
-            logger.error(f"JobCoach error: {e}")
-            raise Exception(f"Job coach unavailable: {str(e)}")
+        history_lines = []
+        for m in messages[:-1]:
+            role = "Candidate" if m["role"] == "user" else "Genie"
+            history_lines.append(f"{role}: {m['content']}")
+        if history_lines:
+            context_parts.append("Conversation so far:\n" + "\n".join(history_lines))
+
+        system = _SYSTEM_PROMPT
+        if context_parts:
+            system += "\n\n--- Context ---\n" + "\n\n".join(context_parts)
+
+        # Retry logic
+        for attempt in range(3):
+            try:
+                return llm_call_sync(
+                    system=system,
+                    user=messages[-1]["content"],
+                    temp=0.7,
+                    max_tokens=settings.MAX_TOKENS_CHAT,
+                )
+            except Exception as exc:
+                logger.error(f"JobCoach attempt {attempt + 1} error: {exc}")
+                if attempt < 2:
+                    import time
+                    time.sleep(2 ** attempt)
+                else:
+                    raise Exception(f"Unable to generate response after 3 attempts: {exc}")
 
 
-_job_coach = None
+_instance: Optional[JobCoach] = None
+
 
 def get_job_coach() -> JobCoach:
-    global _job_coach
-    if _job_coach is None:
-        _job_coach = JobCoach()
-    return _job_coach
+    global _instance
+    if _instance is None:
+        _instance = JobCoach()
+        logger.info("[job_coach] ready — Groq → Anthropic → Gemini")
+    return _instance

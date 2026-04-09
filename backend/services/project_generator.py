@@ -1,12 +1,11 @@
-import google.genai as genai
 from typing import List, Dict, Optional
 import logging
 import json
 import re
 
 from backend.config import settings
+from backend.services.llm import llm_call_sync, llm_call_smart_sync
 
-_genai_client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
 logger = logging.getLogger(__name__)
 
@@ -50,15 +49,12 @@ Suggest {num_projects} hands-on portfolio projects. Respond ONLY with a valid JS
 Make projects SPECIFIC and REAL — no generic to-do apps. Each project should address the skill gaps."""
 
         try:
-            response = _genai_client.models.generate_content(
-                model=settings.GEMINI_SMART_MODEL,
-                config=genai.types.GenerateContentConfig(
-                    temperature=0.7,
-                    max_output_tokens=settings.MAX_TOKENS_ROADMAP,
-                ),
-                contents=prompt,
-        )
-            raw = response.text.strip()
+            raw = llm_call_smart_sync(
+                system="You are an expert AI assistant. Respond clearly and concisely.",
+                user=prompt,
+                temp=0.7,
+                max_tokens=settings.MAX_TOKENS_ROADMAP,
+            )
             raw = re.sub(r"^```json\s*", "", raw)
             raw = re.sub(r"\s*```$", "", raw)
             projects = json.loads(raw)
