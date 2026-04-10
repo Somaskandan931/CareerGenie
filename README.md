@@ -1,602 +1,333 @@
+# Career Genie — AI-Powered Career Intelligence Platform
 
-# Career Genie
-
-**Version:** 2.0.0 | **Status:** Active Development | **Last Updated:** April 2026
-
----
-
-## Table of Contents
-
-1. [Product Overview](#1-product-overview)
-2. [Goals and Non-Goals](#2-goals-and-non-goals)
-3. [System Architecture](#3-system-architecture)
-4. [Module Specifications](#4-module-specifications)
-5. [Data Flow](#5-data-flow)
-6. [Technology Stack](#6-technology-stack)
-7. [Installation and Configuration](#7-installation-and-configuration)
-8. [Environment Variables](#8-environment-variables)
-9. [API Surface](#9-api-surface)
-10. [Known Limitations and Future Work](#10-known-limitations-and-future-work)
+> From resume to offer: semantic job matching, ATS scoring, mock interviews, and personalised learning roadmaps — all in one system, running locally with Ollama.
 
 ---
 
-## 1. Product Overview
+## Problem Statement
 
-Career Genie is a modular AI-powered career intelligence platform. It combines Retrieval-Augmented Generation (RAG), a multi-agent debate and orchestration layer, a pairwise learning-to-rank engine, and workforce analytics to help job seekers move from resume to offer — with personalized guidance at every step.
+Job seekers today face a fragmented landscape: one tool shows job listings, another grades your resume, and a third offers generic interview tips — but none of these systems talk to each other or adapt to the individual. A fresh graduate in Tamil Nadu applying for a software role has no unified way to understand their skill gaps, find semantically relevant jobs, prepare for interviews, and track their progress toward an offer.
 
-The platform addresses a gap in existing job tools: most tools either show job listings or offer generic resume tips, but none connect skill gap analysis, semantic job matching, ATS optimization, mock interviews, and structured learning paths in a single coherent system. Career Genie does all of this, contextualized to the user's actual resume and target role, with every recommendation validated for confidence before being surfaced.
-
-### Primary Users
-
-- Job seekers preparing for technical and non-technical roles
-- Career changers assessing skill gaps and transition paths
-- Institution administrators (colleges, training centers) monitoring batch readiness via the TN SkillBridge dashboard
+Career Genie solves this by connecting every stage of the job search into a single coherent pipeline. It analyses the user's actual resume, identifies skill gaps relative to their target role, retrieves semantically matched live job listings, scores and rewrites the resume for ATS compatibility, generates a week-by-week learning roadmap, conducts mock interviews with scored feedback, and tracks progress — all personalised to the user and validated for output confidence before anything is shown.
 
 ---
 
-## 2. Goals and Non-Goals
+## Features
 
-### Goals
-
-- Provide semantically accurate job matching based on resume content, not just keyword overlap
-- Generate actionable, personalized career plans including roadmaps, projects, and skill gap analysis
-- Simulate realistic interview experiences with scored feedback
-- Score and rewrite resumes for ATS compatibility
-- Surface real-time market demand data for target roles and skills
-- Track user progress across DSA practice, roadmap completion, projects, and interview pipeline
-- Record user feedback signals and adapt job match rankings over time using a pairwise learning-to-rank model trained on revealed preferences
-- Coordinate multiple AI agents through a shared memory bus, debate loop, and cross-agent consistency validation to produce unified career guidance
-- Flag low-confidence outputs and degrade gracefully rather than silently failing
-- **NEW:** Run fully locally using Ollama as the primary LLM and embedding provider
-
-### Non-Goals
-
-- Career Genie does not guarantee job placement
-- The platform does not crawl or aggregate proprietary job board databases; it relies on SerpAPI (Google Jobs)
-- Career Genie does not provide legally binding career or financial advice
-- Multi-user authentication and per-user data isolation are out of scope for v1.0
-
----
-
-## 3. System Architecture
-
-Career Genie is organized into backend engines, each independently responsible for a domain of functionality. All engines are exposed through a FastAPI backend and consumed by a React frontend.
-
-```
-Frontend (React + Tailwind CSS)
-  Job Matches | Learning | AI Coach | Interview | Insights | Institution Dashboard
-                              |
-                      FastAPI Backend
-                              |
-  +--------+--------+--------+--------+--------+--------+--------+--------+
-  |        |        |        |        |        |        |        |        |
- RAG    AI Copilot  Gen    Job Intel  Feedback  Agent   Ranking Uncertainty
-Engine   Layer    Engines   Layer    & Learning Debate  (LTR)   Handler
-  |        |        |        |        |        |        |        |
-Chroma   Ollama   Struct.  SerpAPI  Adaptive  Propose  BPR SGD  Confidence
-(Ollama  (Primary) JSON     +Cache   Weights   Critique  Model   Tiers
-Embed)
-```
-
-### Provider Waterfall (NEW)
-
-| Priority | Provider | Type | Requirements |
-|----------|----------|------|--------------|
-| 1 | Ollama (llama3.2:3b) | Local LLM | `ollama serve` running |
-| 2 | Groq (Llama 3.3 70B) | Cloud Fallback | `GROQ_API_KEY` |
-| 3 | Anthropic (Claude) | Cloud Fallback | `ANTHROPIC_API_KEY` |
-| 4 | Gemini | Cloud Fallback | `GEMINI_API_KEY` |
-
-### Embedding Waterfall (NEW)
-
-| Priority | Provider | Type | Requirements |
-|----------|----------|------|--------------|
-| 1 | Ollama (all-minilm) | Local Embeddings | `ollama serve` running |
-| 2 | Sentence Transformers | Local Fallback | First download from Hugging Face |
-
-### Engine Summary
-
-| Engine | Files | Responsibility |
-|---|---|---|
-| RAG Engine | `matcher.py`, `vector_store.py`, `enhanced_skill_extractor.py` | Semantic job matching and skill comparison |
-| AI Copilot Layer | `job_coach.py`, `interview_coach.py`, `career_advisor.py`, `market_insights.py` | Conversational AI, mock interviews, career planning |
-| Generation Engines | `roadmap_generator.py`, `project_generator.py` | Structured learning roadmaps and portfolio projects |
-| Job Intelligence Layer | `job_scraper.py`, `job_filter.py` | Live job retrieval, quality scoring, scam detection |
-| Feedback & Learning Engine | `feedback_engine.py` | Feedback signal recording, EMA weight updates, user profile building, personalised scoring |
-| Agent Orchestration Layer | `agent_orchestrator.py` | Multi-agent task planning, shared memory bus, debate synthesis, uncertainty-gated execution |
-| Agent Debate System | `agent_debate.py` | Propose → Critique → Synthesise → Reflect loop with retry controller |
-| Learning-to-Rank Engine | `learning_to_rank.py` | Pairwise BPR ranking model, per-user and population models, NDCG evaluation |
-| Uncertainty Handler | `uncertainty_handler.py` | Confidence scoring, output validation, cross-agent consistency checking |
-| TN Analytics Engine | `tn_automotive_taxonomy.py` | NSQF-based role readiness and batch analytics |
-
-Supporting services: `resume_parser.py`, `resume_rewriter.py`, `ats_scorer.py`, `progress_store.py`, `progress_tracker.py`
-
----
-
-## 4. Module Specifications
-
-### 4.1 RAG Engine
-
-#### `vector_store.py` — VectorStore
-
-Manages the ChromaDB vector database used for semantic job retrieval.
-
-- Embeds job documents using **Ollama all-minilm** (primary) or Sentence Transformers (fallback)
-- Supports batch upsert (32 docs per batch) with ChromaDB persistence
-- Applies a freshness boost during retrieval: jobs posted within 30 days receive a distance penalty reduction of up to 0.1, causing them to rank higher
-- Exposes `index_jobs()`, `search()`, `get_stats()`, and `clear()`
-- Telemetry is disabled at the environment level to avoid a known `posthog` signature mismatch
-
-#### `matcher.py` — JobMatcher
-
-Orchestrates the full matching pipeline: job refresh, RAG retrieval, skill extraction, adaptive scoring, LTR re-ranking, and LLM explanation generation.
-
-Match score is computed as a weighted sum. Weights start at the population prior below and adapt per user over time via the Feedback Engine:
-
-| Component | Default Weight | Source |
-|---|---|---|
-| Semantic similarity (vector distance) | 35% (adaptive) | ChromaDB cosine distance |
-| Skill overlap (matched / total job skills) | 45% (adaptive) | Regex skill extraction |
-| Title / role alignment | 20% (adaptive) | Keyword and variation matching |
-| Critical skill penalty | up to -15 pts | Missing Python, Java, JS, SQL, AWS, React, Docker |
-
-Per-component scores are stored on every match result to enable reward attribution. For users with a feedback history, `personalise_score()` applies an additional ±10 point profile bonus. After initial matching, the LTR engine re-ranks results using the learned pairwise model when a `user_id` is present.
-
-#### `enhanced_skill_extractor.py` — EnhancedSkillExtractor
-
-Extracts skills from free text with surrounding context awareness.
-
-- Skill categories: Python, JavaScript, Machine Learning, Cloud, Databases, DevOps
-- Detects proficiency level (beginner / intermediate / proficient / expert) from contextual keywords
-- Extracts years of experience using regex patterns
-- Deduplicates by category, retaining the highest-proficiency match
-
----
-
-### 4.2 AI Copilot Layer
-
-#### `job_coach.py` — JobCoach
-
-A stateless conversational career coach ("Genie") backed by Ollama (primary) with cloud fallbacks.
-
-- Accepts full conversation history and optional resume context per request
-- System prompt instructs the model to give specific, actionable advice
-- Automatic retry logic with exponential backoff (3 attempts)
-
-#### `interview_coach.py` — InterviewCoach
-
-Conducts mock interviews across three modes: technical, behavioural, and HR.
-
-- `generate_questions()` — Pre-generates a question bank with difficulty levels, hints, and ideal answer key points
-- `evaluate_answer()` — Scores a candidate answer 0–10, returns strengths, improvements, a sample better answer, and a follow-up question
-- `chat()` — Runs a live mock interview as a back-and-forth conversation
-
-#### `career_advisor.py` — CareerAdvisor
-
-Generates a comprehensive career plan from resume, target role, and cross-agent context.
-
-- Extracts current skills from resume using a configurable `TECH_SKILLS` list
-- Accepts ATS score, market insights, and user behaviour profile from other agents
-- Calls Ollama (primary) to produce a current assessment, 4 skill gaps with importance and level metadata, market insights, and a 5-step action plan
-
-#### `market_insights.py` — MarketInsights
-
-Combines Google Trends data with LLM-generated analysis.
-
-- Fetches interest-over-time data for up to 10 keywords via `pytrends`
-- Rate-limit handling: exponential back-off with jitter on 429 responses (up to 3 retries per chunk)
-- In-memory cache with a 6-hour TTL
-- Generates analysis using Ollama (primary) with fallback to Groq and a template-based fallback when LLM unavailable
-
----
-
-### 4.3 Generation Engines
-
-#### `roadmap_generator.py` — RoadmapGenerator
-
-Generates a phased, week-by-week learning roadmap structured as JSON.
-
-- Accepts resume text, target role, skill gaps, duration in weeks, and experience level
-- Injects verified resource URLs from an internal `RELIABLE_RESOURCES` database
-- Post-processes LLM output to replace null or missing resource URLs with database fallbacks
-
-#### `project_generator.py` — ProjectGenerator
-
-Suggests portfolio-building projects tailored to skill gaps and target role.
-
-- Prompts Ollama to generate specific, real-world projects
-- Output per project: tech stack, skills covered, gap skills addressed, key features, learning outcomes, recruiter impact statement, bonus extensions
-
----
-
-### 4.4 Job Intelligence Layer
-
-#### `job_scraper.py` — JobScraper
-
-Fetches live job listings from Google Jobs via SerpAPI.
-
-- Parameters: query, location, max jobs (capped at 100), and maximum posting age in days
-- In-memory cache keyed by MD5 hash with a 5-minute TTL
-- Returns structured job dicts with: id, title, company, location, description, apply link, posting date
-
-#### `job_filter.py` — SmartJobFilter
-
-Post-processes job lists to surface high-quality, relevant postings.
-
-Quality score (0–10) is derived from a base of 5.0 with adjustments for red-flag keywords, quality indicators, description length, company name legitimacy, and apply link presence.
-
----
-
-### 4.5 Feedback & Learning Engine
-
-#### `feedback_engine.py` — FeedbackEngine
-
-Records user feedback signals, updates adaptive scoring weights, and exposes a personalised scoring API.
-
-**Signal Types and Rewards**
-
-| Signal | Reward |
+| Feature | What it does |
 |---|---|
-| `offer_received` | +3.0 |
-| `interview_landed` | +2.0 |
-| `apply_click` | +1.0 |
-| `rate_match_up` | +0.8 |
-| `save_job` | +0.6 |
-| `view_details` | +0.3 |
-| `scroll_past` | -0.1 |
-| `dismiss` | -0.5 |
-| `rate_match_down` | -0.8 |
-
-**Adaptive Weight Update**
-
-Weights are updated using EMA (Exponential Moving Average) with `EMA_ALPHA = 0.15`. Cold-start users (fewer than 5 signals) receive blended weights toward the population prior.
+| **Resume Parsing** | Extracts plain text from uploaded PDF or DOCX resumes using pdfplumber and python-docx |
+| **ATS Scorer** | Scores a resume against a target role or job description; returns overall score, keyword score, format score, missing/found keywords, section feedback, bullet quality, and improvement suggestions |
+| **Resume Rewriter** | Rewrites resumes for ATS optimisation with a professional summary, action verbs, quantified achievements, and ATS-friendly formatting |
+| **Semantic Job Matching** | Embeds the resume and job listings using Ollama (all-minilm); retrieves the top-k matches via ChromaDB cosine similarity with a freshness boost for recent postings |
+| **Adaptive Scoring** | Computes a weighted match score (semantic 35%, skill overlap 45%, title alignment 20%) that adapts per user over time based on recorded feedback signals using EMA |
+| **Learning-to-Rank** | Re-ranks job matches using a pairwise BPR SGD model trained on the user's revealed job preferences; auto-retrains every 20 new pairs; NDCG@5 evaluated after each run |
+| **Job Intelligence** | Fetches live job listings from Google Jobs via SerpAPI; filters and quality-scores postings (0–10) based on red flags, description length, company legitimacy, and apply link presence |
+| **AI Job Coach** | Stateless conversational career coach ("Genie") backed by Ollama with cloud fallbacks; accepts full conversation history and resume context per request |
+| **Mock Interviews** | Generates technical, behavioural, and HR question banks with difficulty levels and ideal answer key points; evaluates candidate answers 0–10 with strengths, improvements, and a sample answer |
+| **HR Recruiter Simulation** | Simulates a full HR panel evaluation: hire verdict, dimension scores, green/red flags, interview questions, salary bracket estimate, and internal recruiter notes |
+| **Learning Roadmap** | Generates a phased, week-by-week learning plan from skill gaps with verified resource URLs injected from an internal database |
+| **Portfolio Projects** | Suggests real-world portfolio projects tailored to skill gaps with tech stack, learning outcomes, and recruiter impact statement |
+| **Multi-Agent Debate** | Runs a Propose → Critique → Synthesise → Reflect loop using five typed agents to stress-test career recommendations before surfacing them |
+| **Market Insights** | Fetches Google Trends data for up to 10 skill keywords with 6-hour in-memory cache; generates LLM analysis of market demand and salary trends |
+| **Progress Tracker** | Tracks DSA problems, roadmap tasks, portfolio projects, and interview pipeline with streak, skill velocity, and retention risk metrics per user |
+| **TN SkillBridge Analytics** | NSQF-aligned skill taxonomy for Tamil Nadu's automotive sector; batch analytics for institutions tracking student/worker readiness across 7 job roles |
+| **Uncertainty Handler** | Validates every system output before returning it; assigns confidence tiers (high / medium / low / unreliable) and flags or retries low-confidence outputs |
+| **Feedback Engine** | Records 9 signal types (apply click, offer received, dismiss, etc.) with signed rewards; updates adaptive scoring weights per user via EMA |
 
 ---
 
-### 4.6 Agent Orchestration Layer
+## Tech Stack
 
-#### `agent_orchestrator.py` — AgentOrchestrator
-
-Coordinates five typed agents through a shared `AgentMemory` bus.
-
-**Registered Agents**
-
-| Agent | Responsibilities |
+### Frontend
+| Technology | Purpose |
 |---|---|
-| `ResumeAgent` | ATS scoring, resume rewriting, skill extraction |
-| `JobAgent` | Job matching, filtering, LTR re-ranking, market insights |
-| `InterviewAgent` | Question generation, answer evaluation, session summary |
-| `RoadmapAgent` | Roadmap generation, project suggestion, feedback-driven prioritisation |
-| `AdvisorAgent` | Career advice, debate-based synthesis |
+| React 18 | UI framework |
+| Tailwind CSS | Styling |
 
-**Goal Plans**
-
-- `full_analysis` — Complete analysis including debate synthesis
-- `quick_match` — Skills → job match → LTR rank
-- `interview_prep` — Skills → gaps → question generation
-- `roadmap_only` — Skills → gaps → roadmap → projects
-
----
-
-### 4.7 Agent Debate System
-
-#### `agent_debate.py` — DebateOrchestrator
-
-Runs a structured multi-agent debate to produce career recommendations that are stress-tested before being shown to the user.
-
-**Debate Participants**
-
-| Role | Agent | Perspective |
-|---|---|---|
-| Proposer | `OptimistProposer` | Opportunity-focused |
-| Proposer | `RealistProposer` | Gap-analysis driven |
-| Proposer | `MarketProposer` | Market-demand driven |
-| Critic | `CriticAgent` | Attacks every proposal |
-| Synthesiser | `SynthesisAgent` | Merges best elements |
-
-**Debate Loop**
-
-- Round 1: Three proposers generate independent plans
-- Critic attacks each plan → weaknesses, strengths, confidence
-- Convergence check: if avg critic confidence ≥ 0.75, stop early
-- Round 2: Proposers revise using critique (if not converged)
-- SynthesisAgent produces final answer + consensus score
-- ReflectionLayer self-assesses output; RetryController replans if confidence < 0.6
-
----
-
-### 4.8 Learning-to-Rank Engine
-
-#### `learning_to_rank.py` — LearningToRankEngine
-
-Replaces population-wide EMA heuristic tuning with a proper pairwise ranking model using Bayesian Personalised Ranking (BPR) loss with SGD.
-
-**Feature Vector (12 features per job)**
-
-| Index | Feature | Description |
-|---|---|---|
-| 0 | `semantic_score` | Normalised vector similarity |
-| 1 | `skills_score` | Normalised skill overlap ratio |
-| 2 | `title_score` | Normalised title alignment |
-| 3 | `recency` | 1.0 for today, 0.0 for 30+ days old |
-| 4 | `description_quality` | Length proxy |
-| 5 | `has_apply_link` | Binary |
-| 6-8 | Affinity scores | Role, company, location from user profile |
-| 9 | `seniority_match` | Job title vs user seniority signal |
-| 10 | `skill_gap_penalty` | Inverted missing skill count |
-| 11 | `overall_match` | Normalised overall match score |
-
-**Training**
-
-- Auto-retrains when 20 new preference pairs accumulate
-- BPR loss with L2 regularisation
-- NDCG@5 computed on held-out split after every run
-- Population model blends with per-user models: `0.4 * user + 0.6 * population`
-
----
-
-### 4.9 Uncertainty Handler
-
-#### `uncertainty_handler.py` — UncertaintyHandler
-
-Validates every system output before it is stored in agent memory or returned to the user.
-
-**Confidence Tiers**
-
-| Tier | Score Range | Behaviour |
-|---|---|---|
-| `high` | ≥ 0.75 | Show normally |
-| `medium` | 0.50 – 0.74 | Show with note |
-| `low` | 0.25 – 0.49 | Show with warning |
-| `unreliable` | < 0.25 | Show fallback or retry |
-
-**Validators**
-
-- `ResumeParseValidator` — word count, section detection, encoding artefacts
-- `SkillExtractionValidator` — minimum count, taxonomy coverage, cross-reference
-- `LLMOutputValidator` — required fields, numeric ranges, filler text detection
-- `ConsistencyChecker` — cross-validates ATS vs advisor vs job matches
-
----
-
-### 4.10 Resume Services
-
-#### `resume_parser.py` — ResumeParser
-
-Extracts plain text from uploaded resumes (PDF via pdfplumber, DOCX via python-docx).
-
-#### `resume_rewriter.py` — ResumeRewriter
-
-Rewrites resumes for ATS optimization with professional summary, action verbs, quantified achievements, and ATS-friendly formatting.
-
-#### `ats_scorer.py` — ATSScorer
-
-Scores a resume against a target role, returning overall score, keyword score, format score, missing/found keywords, section feedback, bullet quality analysis, and improvement suggestions.
-
----
-
-### 4.11 Progress Tracker
-
-#### `progress_tracker.py` — ProgressTracker
-
-Tracks user progress across all modules with per-user JSON persistence. Every significant user action emits a typed signal to the Feedback Engine.
-
-**Tracked Sections**
-
-| Section | Key Operations |
+### Backend
+| Technology | Purpose |
 |---|---|
-| DSA Problems | `log_dsa_problem()`, `bulk_update_dsa()` |
-| Roadmap | `import_roadmap()`, `update_task()` |
-| Projects | `add_project()`, `update_project()` |
-| Interviews | `add_interview()`, `update_interview_stage()` |
-
-**Additional Metrics**
-
-- `streak` — consecutive active days
-- `skill_velocity` — DSA solves per day (last 7 days)
-- `retention_risk` — inactive for 3+ days
-
----
-
-### 4.12 TN SkillBridge Engine
-
-#### `tn_automotive_taxonomy.py`
-
-Implements an NSQF-aligned skill taxonomy for Tamil Nadu's automotive sector with 20 skills, 7 job roles, NSQF levels 1-7, and training source recommendations.
+| FastAPI (Python 3.10+) | REST API framework |
+| Ollama (llama3.2:3b) | Primary local LLM |
+| Ollama (all-minilm) | Primary local embeddings (384-dim) |
+| Groq (Llama 3.3 70B) | LLM cloud fallback 1 |
+| Anthropic Claude | LLM cloud fallback 2 |
+| Gemini | LLM cloud fallback 3 |
+| Sentence Transformers (all-MiniLM-L6-v2) | Embeddings fallback |
+| ChromaDB | Persistent vector database for job retrieval |
+| SerpAPI (Google Jobs engine) | Live job listing retrieval |
+| pytrends | Google Trends data for market insights |
+| pdfplumber | PDF resume parsing |
+| python-docx | DOCX resume parsing |
+| Custom BPR SGD | Pairwise learning-to-rank model (pure Python) |
+| Per-user JSON files | User progress and feedback persistence |
 
 ---
 
-## 5. Data Flow
-
-### Job Matching Flow (Updated with Ollama)
+## Project Structure
 
 ```
-User uploads resume (PDF/DOCX)
-        |
-   resume_parser.parse() extracts text
-        |
-   uncertainty_handler.wrap_parse() [confidence check]
-        |
-   matcher checks vector_store job count
-        |--- if < 20 jobs ----> job_scraper.fetch_jobs() --> vector_store.index_jobs()
-        |                         (Ollama embeddings for indexing)
-        |
-   feedback_engine.get_weights(user_id)
-        |
-   vector_store.search(resume_text, top_k * 2)
-        | (Ollama embeddings for query)
-        |
-   skill extraction + adaptive weighted scoring + critical skill penalty
-        |
-   feedback_engine.personalise_score() [profile bonus ±10 pts]
-        |
-   ltr_engine.rank(user_id, matches) [pairwise BPR re-ranking]
-        |
-   uncertainty_handler.wrap_matches() [confidence check]
-        |
-   Return ranked matches with ltr_score, skill gaps, explanations
-```
-
-### LLM Provider Waterfall
-
-```
-LLM Request
-        |
-   Try Ollama (local)
-        |--- Success: Return response
-        |--- Failure: Log warning, continue
-        |
-   Try Groq (cloud fallback)
-        |--- Success: Return response
-        |--- Failure: Continue
-        |
-   Try Anthropic (cloud fallback)
-        |--- Success: Return response
-        |--- Failure: Continue
-        |
-   Try Gemini (cloud fallback)
-        |--- Success: Return response
-        |--- Failure: Raise error
+career-genie/
+├── backend/
+│   ├── main.py                      # FastAPI app, all route definitions
+│   ├── config.py                    # Settings, tech skills list, environment vars
+│   ├── requirements.txt             # Python dependencies
+│   └── services/
+│       ├── llm.py                   # LLM provider waterfall (Ollama → Groq → Anthropic → Gemini)
+│       ├── resume_parser.py         # PDF/DOCX text extraction
+│       ├── resume_rewriter.py       # ATS-optimised resume rewriting
+│       ├── ats_scorer.py            # ATS scoring engine with JSON parsing and fallback
+│       ├── matcher.py               # Job matching pipeline (RAG + adaptive scoring + LTR)
+│       ├── vector_store.py          # ChromaDB wrapper with Ollama embeddings and freshness boost
+│       ├── enhanced_skill_extractor.py  # Skill extraction with proficiency and experience detection
+│       ├── job_scraper.py           # SerpAPI job fetcher with MD5-keyed in-memory cache
+│       ├── job_filter.py            # Quality scoring and scam detection for job listings
+│       ├── job_coach.py             # Conversational career coach backed by Ollama
+│       ├── interview_coach.py       # Mock interview question generation and answer evaluation
+│       ├── career_advisor.py        # Career plan generation from resume + cross-agent context
+│       ├── market_insights.py       # Google Trends + LLM market analysis with 6hr cache
+│       ├── roadmap_generator.py     # Week-by-week phased learning roadmap generator
+│       ├── project_generator.py     # Portfolio project suggestion engine
+│       ├── feedback_engine.py       # Signal recording, EMA weight updates, personalised scoring
+│       ├── learning_to_rank.py      # BPR SGD pairwise ranking model with NDCG evaluation
+│       ├── agent_orchestrator.py    # Five-agent orchestration layer with shared memory bus
+│       ├── agent_debate.py          # Multi-agent propose-critique-synthesise debate loop
+│       ├── uncertainty_handler.py   # Output confidence scoring, validation, and consistency checks
+│       ├── progress_tracker.py      # Per-user progress tracking across all modules
+│       ├── progress_store.py        # JSON persistence for progress data
+│       ├── tn_automotive_taxonomy.py # NSQF-aligned TN sector skill taxonomy and batch analytics
+│       ├── ollama_service.py        # Ollama availability check and model management
+│       └── live_session.py          # Live interview session state management
+├── frontend/
+│   ├── src/
+│   │   ├── components/
+│   │   │   ├── ResumeAnalyzer.js    # ATS scorer + HR recruiter simulation UI
+│   │   │   ├── JobMatches.js        # Job match results with LTR re-ranking display
+│   │   │   ├── InterviewCoach.js    # Mock interview UI
+│   │   │   ├── Roadmap.js           # Learning roadmap display and progress tracking
+│   │   │   ├── MarketInsights.js    # Trend charts and market analysis UI
+│   │   │   └── Dashboard.js         # Progress dashboard with streak and velocity metrics
+│   │   └── App.js                   # Root component and routing
+│   ├── package.json
+│   └── tailwind.config.js
+├── data/
+│   └── chroma/                      # ChromaDB persistent vector store
+└── test_ollama_setup.py             # Ollama connectivity and model availability test
 ```
 
 ---
 
-## 6. Technology Stack (Updated)
-
-| Layer | Technology |
-|---|---|
-| Frontend | React 18, Tailwind CSS |
-| Backend | FastAPI (Python 3.10+) |
-| Primary LLM | **Ollama (llama3.2:3b)** - Local inference |
-| LLM Fallback 1 | Groq (Llama 3.3 70B) |
-| LLM Fallback 2 | Anthropic Claude |
-| LLM Fallback 3 | Gemini |
-| Primary Embeddings | **Ollama (all-minilm)** - 384-dim vectors |
-| Embeddings Fallback | Sentence Transformers (all-MiniLM-L6-v2) |
-| Vector Database | ChromaDB (persistent client) |
-| Trend Data | pytrends (Google Trends API) |
-| Job Data | SerpAPI (Google Jobs engine) |
-| Resume Parsing | pdfplumber (PDF), python-docx (DOCX) |
-| Ranking Model | Custom BPR SGD (pure Python) |
-| Storage | Per-user JSON files, ChromaDB (vectors) |
-
----
-
-## 7. Installation and Configuration (Updated)
+## Installation & Setup
 
 ### Prerequisites
 
-1. **Install Ollama** (Primary LLM Provider)
-   - Download from https://ollama.com/download
-   - Run `ollama serve` in a terminal
-   - Pull models: `ollama pull all-minilm` and `ollama pull llama3.2:3b`
+**1. Install Ollama** (required — primary LLM and embedding provider)
+```bash
+# Download from https://ollama.com/download and install
+# Then pull the required models:
+ollama pull llama3.2:3b
+ollama pull all-minilm
+```
 
-2. **Install Python 3.10+** and create virtual environment
+**2. Python 3.10+** and **Node.js 18+** must be installed.
+
+**3. Get a SerpAPI key** at [serpapi.com](https://serpapi.com) (required for job matching).
+
+---
 
 ### Backend Setup
 
 ```bash
+# 1. Clone the repository
+git clone https://github.com/yourusername/career-genie.git
+cd career-genie
+
+# 2. Create and activate virtual environment
+python -m venv venv
+source venv/bin/activate        # Windows: venv\Scripts\activate
+
+# 3. Install dependencies
 cd backend
 pip install -r requirements.txt
 
-# Start Ollama (in a separate terminal)
+# 4. Create environment file
+cp .env.example .env
+# Edit .env and set at minimum:
+# SERPAPI_KEY=your_serpapi_key_here
+
+# 5. Start Ollama in a separate terminal
 ollama serve
 
-# Start backend
-uvicorn main:app --reload
+# 6. Start the backend
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
+
+---
 
 ### Frontend Setup
 
 ```bash
+# In a new terminal, from the project root:
 cd frontend
 npm install
 npm start
+# App runs at http://localhost:3000
 ```
 
-### Quick Test
+---
+
+### Verify Everything Works
 
 ```bash
-# Test Ollama is working
+# Test Ollama models are available
 python test_ollama_setup.py
 
 # Test backend health
-curl http://localhost:8000/health
+curl http://localhost:8000/
+
+# Expected response:
+# {"name":"Career Genie AI API","version":"3.0.0","status":"operational",...}
 ```
 
 ---
 
-## 8. Environment Variables (Updated)
+### Environment Variables
 
-| Variable | Required | Description |
-|---|---|---|
-| `OLLAMA_HOST` | No | Ollama API host. Default: `http://localhost:11434` |
-| `OLLAMA_EMBEDDING_MODEL` | No | Ollama embedding model. Default: `all-minilm` |
-| `OLLAMA_LLM_MODEL` | No | Ollama LLM model. Default: `llama3.2:3b` |
-| `GROQ_API_KEY` | No* | Groq API key (fallback when Ollama unavailable) |
-| `ANTHROPIC_API_KEY` | No* | Anthropic API key (secondary fallback) |
-| `GEMINI_API_KEY` | No* | Gemini API key (tertiary fallback) |
-| `SERPAPI_KEY` | Yes | SerpAPI key for Google Jobs scraping |
-| `CHROMA_PERSIST_DIR` | No | ChromaDB storage path. Default: `./data/chroma` |
-| `FEEDBACK_STORE_DIR` | No | Feedback engine store path. Default: `/tmp/career_genie_feedback` |
-| `LTR_STORE_DIR` | No | LTR model store path. Default: `/tmp/career_genie_ltr` |
-
-*\* At least one LLM provider must be available (Ollama recommended, or any cloud API key)*
-
----
-
-## 9. API Surface
-
-All endpoints accept and return JSON.
-
-| Group | Endpoint | Method | Description |
+| Variable | Required | Default | Description |
 |---|---|---|---|
-| Resume | `/upload-resume/parse` | POST | Upload and parse PDF/DOCX |
-| Resume | `/ats/score` | POST | ATS score against target role |
-| Resume | `/resume/rewrite` | POST | ATS-optimized resume rewrite |
-| Matching | `/rag/match-realtime` | POST | Semantic job match with LTR re-ranking |
-| Ranking | `/ranking/preference` | POST | Record pairwise job preference |
-| Ranking | `/ranking/stats` | GET | LTR model stats |
-| Feedback | `/feedback/record` | POST | Record user feedback signal |
-| Feedback | `/feedback/stats` | GET | Feedback stats and weight drift |
-| Orchestrator | `/agent/run` | POST | Execute multi-agent goal plan |
-| Orchestrator | `/agent/intent` | POST | LLM-planned task decomposition |
-| Debate | `/debate/run` | POST | Run full propose-critique-synthesise debate |
-| Coaching | `/coach/chat` | POST | Job coach conversational turn |
-| Interview | `/interview/questions` | POST | Generate interview question bank |
-| Interview | `/interview/evaluate` | POST | Evaluate candidate answer |
-| Interview | `/interview/chat` | POST | Live mock interview turn |
-| Insights | `/insights/market` | POST | Market trends and analysis |
-| Roadmap | `/generate/roadmap` | POST | Generate phased learning roadmap |
-| Projects | `/generate/projects` | POST | Generate portfolio project suggestions |
-| Progress | `/progress/{user_id}/summary` | GET | Dashboard summary with streak/velocity |
-| TN | `/tn/batch-analytics` | POST | TN SkillBridge batch analytics |
+| `SERPAPI_KEY` | **Yes** | — | SerpAPI key for Google Jobs |
+| `OLLAMA_HOST` | No | `http://localhost:11434` | Ollama API host |
+| `OLLAMA_LLM_MODEL` | No | `llama3.2:3b` | Ollama LLM model |
+| `OLLAMA_EMBEDDING_MODEL` | No | `all-minilm` | Ollama embedding model |
+| `GROQ_API_KEY` | No | — | Groq fallback (if Ollama unavailable) |
+| `ANTHROPIC_API_KEY` | No | — | Anthropic fallback |
+| `GEMINI_API_KEY` | No | — | Gemini fallback |
+| `CHROMA_PERSIST_DIR` | No | `./data/chroma` | ChromaDB storage path |
+| `FEEDBACK_STORE_DIR` | No | `/tmp/career_genie_feedback` | Feedback engine store |
+| `LTR_STORE_DIR` | No | `/tmp/career_genie_ltr` | LTR model store |
 
 ---
 
-## 10. Known Limitations and Future Work
+## How It Works
 
-### Current Limitations
+### 1. Resume Upload & Parsing
+User uploads a PDF or DOCX → `resume_parser.py` extracts plain text using pdfplumber or python-docx → `uncertainty_handler` validates the parse (word count, section detection, encoding artefacts) → validated text is passed to all downstream services.
 
-- Ollama requires separate installation and `ollama serve` to be running before backend starts
-- First-time embedding generation with Ollama may have higher latency due to model loading
-- `pytrends` is subject to Google Trends rate limiting
-- Skill extraction covers limited categories; emerging frameworks may not be detected
-- ChromaDB telemetry has known signature mismatch (suppressed via environment variables)
-- SerpAPI results limited to Google Jobs only
-- Per-user JSON storage has last-write-wins semantics under concurrency
-- LTR model requires minimum 10 user preference pairs before per-user weights activate
-- Debate system generates multiple LLM calls per `full_analysis` run, increasing latency
+### 2. ATS Scoring
+Resume text + target role (+ optional job description) → `ats_scorer.py` sends a structured prompt to the LLM → receives JSON with overall score, keyword score, format score, missing/found keywords, per-section feedback, bullet quality, and improvement suggestions → JSON is cleaned, parsed with 4 fallback strategies (direct parse → close unclosed braces → fix quote issues → regex partial extraction), and validated before returning.
 
-### Planned Enhancements
+### 3. Semantic Job Matching
+Resume text → Ollama (all-minilm) embeds it as a 384-dim vector → ChromaDB retrieves the top-k*2 candidate jobs by cosine distance with a freshness boost for recent postings → `enhanced_skill_extractor` extracts skills from the resume → each candidate is scored: `0.35 × semantic + 0.45 × skill_overlap + 0.20 × title_alignment` with a critical skill penalty of up to -15 pts → `feedback_engine.personalise_score()` adds a ±10 pt profile bonus for returning users → `ltr_engine.rank()` applies the BPR pairwise model for users with ≥10 preference pairs → `uncertainty_handler` validates the final list.
 
-- Docker Compose setup with Ollama, ChromaDB, and backend in one command
-- GPU acceleration for Ollama inference
-- Per-user authentication and isolated progress persistence
-- Multi-language support for resumes and coaching
-- Real-time voice interview simulation
-- Expanded skill taxonomy beyond current categories
-- Redis-backed atomic store for Feedback Engine and LTR models
-- Streaming debate responses to reduce perceived latency
-- Neural re-ranker replacing linear BPR model
-- Offline A/B evaluation framework for ranking strategies
+### 4. Learning-to-Rank Adaptation
+When a user clicks apply, saves a job, dismisses, or receives an offer → `feedback_engine` records the signal with a signed reward → EMA updates the user's adaptive scoring weights (α=0.15) → when 20 new pairwise preferences accumulate, the BPR SGD model retrains on the user's history → future job rankings reflect their revealed preferences.
+
+### 5. Multi-Agent Debate
+On `full_analysis` goal → `agent_orchestrator` plans tasks across 5 typed agents (Resume, Job, Interview, Roadmap, Advisor) sharing a common `AgentMemory` bus → `agent_debate.py` runs: 3 proposers generate independent career plans → `CriticAgent` attacks each → convergence check (if avg confidence ≥ 0.75, stop early; else run round 2 with revised proposals) → `SynthesisAgent` merges the best elements → `ReflectionLayer` self-assesses; if confidence < 0.6 the `RetryController` triggers a replan.
+
+### 6. Mock Interview & HR Panel
+User selects role + interview type → `interview_coach.py` prompts the LLM for a question bank with difficulty levels, hints, and ideal answer key points → user answers → answer is evaluated 0–10 with strengths, improvements, and a sample better answer. For HR simulation → `_generate_hr_panel()` in `main.py` prompts the LLM for a full structured panel (hire verdict, 5 dimension scores, green/red flags, recruiter questions, salary bracket, internal notes) → JSON is cleaned and validated with defaults before rendering.
+
+### 7. Learning Roadmap Generation
+Skill gaps from resume analysis → `roadmap_generator.py` sends gaps + target role + duration to the LLM → receives a week-by-week phased JSON plan → post-processes to replace null resource URLs with verified fallbacks from the internal `RELIABLE_RESOURCES` database → rendered as an interactive roadmap with progress tracking.
+
+---
+
+## Scalability
+
+**1. Stateless backend, horizontal scaling:** Every FastAPI endpoint is stateless — all state lives in ChromaDB, per-user JSON files, or the LTR store. Multiple backend instances can run behind a load balancer without session stickiness. Replacing per-user JSON with Redis gives atomic writes under concurrency.
+
+**2. Vector retrieval scales with job volume:** ChromaDB handles millions of vectors with sub-second retrieval. Batch upserts (32 docs/batch) prevent memory spikes during large job refresh cycles. The freshness boost is applied at query time, not stored, so index structure doesn't change.
+
+**3. LLM provider waterfall absorbs load spikes:** If Ollama is saturated (e.g. during concurrent interview sessions), requests automatically fall through to Groq → Anthropic → Gemini. Adding GPU acceleration to Ollama (via `CUDA` or `Metal`) multiplies local inference throughput.
+
+**4. LTR model is lightweight:** The BPR SGD model is a 12-feature linear model in pure Python — training on 200 preference pairs takes under 100ms. Population and per-user weights are blended (60/40), so new users get reasonable rankings immediately.
+
+**5. Bottlenecks identified:** The agent debate system makes 6–10 LLM calls per `full_analysis` run — this is the primary latency bottleneck. Mitigation: stream debate responses, cache synthesis results per resume hash, or run proposers in parallel threads. SerpAPI is rate-limited; caching job results by MD5 hash with a 5-minute TTL reduces redundant calls significantly.
+
+**6. Docker-ready:** The backend, ChromaDB, and Ollama can each run in a separate container. A `docker-compose.yml` with named volumes for ChromaDB persistence and `ollama pull` in the Ollama container startup brings the full stack up in one command.
+
+---
+
+## Feasibility
+
+**Built and running today:** Every feature listed was built and tested during the hackathon. The system runs end-to-end on a standard laptop with Ollama providing local LLM and embedding inference — no mandatory cloud dependency.
+
+**Minimal infrastructure requirements:** The only hard external dependency is SerpAPI for live job listings (free tier: 100 searches/month). All AI inference runs locally via Ollama. ChromaDB persists to disk with no server required. If Ollama is unavailable, any one of Groq, Anthropic, or Gemini API keys is sufficient to keep the system running.
+
+**Production path is clear:** To take this to production, the changes needed are: (1) swap per-user JSON files for a Redis store with atomic writes, (2) add user authentication (JWT or session-based), (3) containerise with Docker Compose, (4) deploy FastAPI on Render or Railway and the React frontend on Vercel. The CORS configuration, environment variable system, and API surface are already structured for this.
+
+**Dependencies are stable and widely used:** FastAPI, ChromaDB, pdfplumber, python-docx, and Sentence Transformers are all production-grade libraries with active maintenance. There are no experimental or proprietary dependencies that would block deployment.
+
+---
+
+## Novelty
+
+Most career tools are point solutions: LinkedIn shows jobs, Grammarly edits text, LeetCode drills DSA. The few that combine features (like Jobscan or Resume Worded) do so with static keyword matching — they don't use your actual resume to semantically retrieve jobs, adapt to your feedback, or connect resume analysis to interview preparation to learning roadmaps.
+
+Career Genie is different in three specific ways:
+
+**1. Adaptive personalisation loop:** The combination of a feedback signal engine (EMA weight updates) and a pairwise BPR ranking model means the job matching improves with every interaction. This is not a feature claimed by any comparable free or open-source career tool.
+
+**2. Multi-agent debate for career advice:** Rather than a single LLM generating a career plan, three independent proposers generate plans that a critic attacks before a synthesiser produces a final output. This reduces hallucination and surfaces trade-offs the user would otherwise never see. The approach is borrowed from AI safety alignment research and applied here to career decision-making.
+
+**3. Confidence-gated output validation:** Every output from every module passes through a typed validator before being shown. The system knows when it doesn't know — low-confidence outputs are flagged or retried, not silently served. This is a specific gap in existing AI career tools which present all outputs with equal confidence regardless of quality.
+
+**4. Fully local by default:** The entire system can run with zero cloud API calls using Ollama. This matters for users and institutions in regions with data privacy concerns or unreliable internet — a specific gap for the Tamil Nadu institutional use case this project targets.
+
+---
+
+## Feature Depth
+
+**ATS Scorer edge cases handled:**
+- LLM response cleaning with 4 fallback parsing strategies (direct JSON → close unclosed braces → fix quote/key issues → regex partial extraction)
+- All 10 output fields have typed defaults — a partial LLM response still produces a complete, usable result
+- Resume text truncated at 4000 chars, JD at 3000 chars — large enough for real resumes, small enough to stay within context limits
+
+**HR Recruiter Simulation:**
+- Returns 10 structured fields: hire verdict (5 options), verdict summary, confidence %, 5 dimension scores (0–10), green flags, red flags, N recruiter questions (each with type and reason), salary bracket, interview rounds, internal notes
+- Hire verdict validated against allowed set; dimension scores clamped 0–10; questions normalised to `{question, type, reason}` even if LLM returns plain strings
+- Full fallback panel returned on any failure so the UI never goes blank
+
+**Learning-to-Rank model:**
+- 12-feature vector per job including affinity scores derived from user history
+- Population model (trained on all users) blends with per-user model (60/40) — new users get good rankings immediately, not after 50 interactions
+- NDCG@5 evaluated on held-out split after every retrain — model quality is measurable, not assumed
+
+**Job quality filtering:**
+- Quality score derived from: base 5.0 + adjustments for red-flag phrases, quality indicator phrases, description length bracket, company name heuristics, apply link presence
+- Scam detection via red-flag keyword list built from known patterns
+
+**Confidence system:**
+- 4 typed validators: ResumeParseValidator, SkillExtractionValidator, LLMOutputValidator, ConsistencyChecker
+- ConsistencyChecker cross-validates ATS score vs advisor output vs job match scores — catches cases where one module produces an outlier
+
+---
+
+## Ethical Use & Disclaimer
+
+Career Genie uses AI-generated content for resume analysis, HR simulation, interview evaluation, and career advice. All outputs are informational only and do not constitute professional career, legal, or financial advice.
+
+**HR Recruiter Simulation:** The hire verdict, dimension scores, and recruiter notes are generated by a language model and are not the opinion of any real recruiter or employer. They should be used as a self-assessment tool, not as a prediction of actual hiring outcomes.
+
+**ATS Scoring:** Scores are approximations based on keyword and format heuristics. They do not reflect the behaviour of any specific company's ATS system.
+
+**Job Matching:** Job listings are retrieved from Google Jobs via SerpAPI. Career Genie does not verify the accuracy, legitimacy, or current availability of any listed position.
+
+**Data:** No user resume data is sent to any external service except the configured LLM provider fallbacks (Groq, Anthropic, Gemini) when Ollama is unavailable. When running fully on Ollama, all data stays local.
+
+---
+
+## License
+
+MIT License — see [LICENSE](LICENSE) for details.
+
+---
+
+## Author
+
+Built for Origin 2026.
+
+**Team Name:** Neon genesis
+**Contact Email:** somaskandan931@gmail.com
