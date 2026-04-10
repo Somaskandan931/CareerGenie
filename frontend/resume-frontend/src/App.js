@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback, createContext } from "react";
-
 import JobSearch from './components/JobSearch';
 import JobMatches from './components/JobMatches';
 import SkillAssessmentDashboard from './components/SkillAssessmentDashboard';
@@ -13,10 +12,9 @@ import ProgressDashboard from './components/ProgressDashboard';
 import ResumeRewriter from './components/ResumeRewriter';
 import MentorSearch from './components/MentorSearch';
 import ResumeAnalyzer from './components/ResumeAnalyzer';
+import API_BASE_URL from './config';
 
 export const DarkModeContext = createContext({ dark: false, toggle: () => {} });
-
-const API_BASE_URL = 'http://localhost:8000';
 
 // Stable user ID persisted to localStorage so feedback + LTR data accumulates
 // across sessions. In a real auth system this would come from your auth provider.

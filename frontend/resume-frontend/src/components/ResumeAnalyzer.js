@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-const API_BASE_URL = "http://localhost:8000";
+import API_BASE_URL from '../config';
 
 const Icon = ({ d, size = "h-4 w-4", className = "" }) => (
   <svg className={`${size} ${className}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">

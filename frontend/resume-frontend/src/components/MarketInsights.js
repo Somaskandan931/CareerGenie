@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 
-const API_BASE_URL = "http://localhost:8000";
+import API_BASE_URL from '../config';
 
 const QUICK_ROLES = [
   "Machine Learning Engineer", "Full Stack Developer", "Data Scientist",

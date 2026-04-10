@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 
-const API_BASE_URL = "http://localhost:8000";
+import API_BASE_URL from '../config';
 
 // ─── Mock sample profiles for demo ───────────────────────────────────────────
 const SAMPLE_PROFILES = [

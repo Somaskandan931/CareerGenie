@@ -2,11 +2,11 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
 import VideoPanel from "./VideoPanel";
 import LiveFeedback from "./LiveFeedback";
 
-const API_BASE_URL = process.env.REACT_APP_API_URL || "http://localhost:8000";
+import API_BASE_URL from '../config';
 const WS_BASE =
   process.env.REACT_APP_WS_URL ||
   (window.location.protocol === "https:" ? "wss://" : "ws://") +
-    (process.env.REACT_APP_API_HOST || "localhost:8000");
+    (new URL(process.env.REACT_APP_API_URL || "http://localhost:8000").host);
 
 const INTERVIEW_TYPES = [
   { value: "mixed",       label: "Mixed",      icon: "⚡", desc: "All question types" },

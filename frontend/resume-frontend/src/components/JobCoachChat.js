@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
 
-const API_BASE_URL = "http://localhost:8000";
+import API_BASE_URL from '../config';
 
 const SUGGESTED_QUESTIONS = [
   "How should I negotiate my salary for a senior developer role?",

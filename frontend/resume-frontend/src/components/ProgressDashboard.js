@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 
-const API_BASE_URL = "http://localhost:8000";
+import API_BASE_URL from '../config';
 const USER_ID = "default_user";
 
 const Icon = ({ d, size = "h-4 w-4", className = "" }) => (

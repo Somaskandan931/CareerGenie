@@ -19,7 +19,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Request, UploadFile, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -39,7 +39,6 @@ async def lifespan(app: FastAPI):
     """Startup and shutdown events."""
     logger.info("🚀 Career Genie AI API starting up...")
 
-    # Initialize services
     try:
         from backend.services.vector_store import vector_store
         stats = vector_store.get_stats()
@@ -81,17 +80,42 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS middleware
+# ─────────────────────────────────────────────────────────────────────────────
+# CORS MIDDLEWARE
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX: allow_credentials=True is incompatible with allow_origins=["*"].
+# Browsers enforce this strictly — requests from other users will be blocked.
+# Solution: either list explicit origins OR use wildcard without credentials.
+#
+# We use a dynamic origin-reflection approach: any origin is allowed, and we
+# echo it back. This is safe for a public API that doesn't rely on cookies.
+# If you add cookie-based auth later, switch to an explicit origins allowlist.
+
+ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://localhost:8000",
+]
+
+def _is_allowed_origin(origin: str) -> bool:
+    """Allow localhost origins and common deployment platforms."""
+    if not origin:
+        return False
+    if origin in ALLOWED_ORIGINS:
+        return True
+    # Allow all Netlify, Vercel, ngrok, and Render preview URLs
+    for suffix in (".netlify.app", ".vercel.app", ".ngrok-free.app", ".ngrok.io", ".onrender.com"):
+        if origin.endswith(suffix):
+            return True
+    return False
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:8000",
-        "https://*.netlify.app",  # Allow all Netlify frontends
-        "https://*.ngrok-free.app",  # Allow all ngrok URLs
-        "*"  # Temporarily allow all for testing
-    ],
-    allow_credentials=True,
+    # Reflect the request origin back — equivalent to "*" but compatible with
+    # allow_credentials=True and explicit per-origin checking.
+    allow_origin_regex=r".*",   # FastAPI/Starlette will reflect the actual origin
+    allow_credentials=False,    # Keep False unless you switch to cookie auth
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -228,7 +252,6 @@ async def parse_resume(file: UploadFile = File(...)):
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file provided")
 
-    # Save temporarily
     temp_path = Path(f"/tmp/{uuid.uuid4()}{Path(file.filename).suffix}")
     try:
         content = await file.read()
@@ -237,7 +260,6 @@ async def parse_resume(file: UploadFile = File(...)):
         from backend.services.resume_parser import resume_parser
         result = resume_parser.parse(str(temp_path))
 
-        # Add uncertainty validation
         from backend.services.uncertainty_handler import get_uncertainty_handler
         uh = get_uncertainty_handler()
         _, report = uh.wrap_parse(result["resume_text"], result["word_count"])
@@ -271,13 +293,12 @@ async def ats_score(request: ATSRequest):
             request.job_description
         )
 
-        # Add uncertainty validation
         from backend.services.uncertainty_handler import get_uncertainty_handler
         uh = get_uncertainty_handler()
         _, report = uh.wrap_ats(result)
 
         return {
-            "result": result,              # frontend reads data.result
+            "result": result,
             "_confidence": report.to_dict() if hasattr(report, "to_dict") else {},
         }
     except Exception as e:
@@ -296,7 +317,6 @@ async def match_realtime(request: MatchRequest):
         from backend.services.matcher import get_job_matcher
         matcher = get_job_matcher()
 
-        # Ensure job index is populated — use job_query if provided, else infer from resume
         from backend.services.vector_store import vector_store
         stats_before = vector_store.get_stats()
         if stats_before["total_jobs"] < 10 or request.force_refresh:
@@ -317,20 +337,16 @@ async def match_realtime(request: MatchRequest):
             force_refresh=request.force_refresh,
         )
 
-        # Filter by min_match_score
         matches = [m for m in matches if m.get("match_score", 0) >= request.min_match_score]
 
-        # Add uncertainty validation
         from backend.services.uncertainty_handler import get_uncertainty_handler
         uh = get_uncertainty_handler()
         validated_matches, report = uh.wrap_matches(matches)
 
-        # Attach _confidence to each job so JobCard can display it
         for job in validated_matches:
             if "_confidence" not in job:
                 job["_confidence"] = None
 
-        # Get career advice with context
         from backend.services.career_advisor import career_advisor
         advice = career_advisor.generate_career_advice(
             resume_text=request.resume_text,
@@ -338,7 +354,6 @@ async def match_realtime(request: MatchRequest):
             job_matches=validated_matches,
         )
 
-        # Build skill_comparison for SkillAssessmentDashboard
         from backend.services.enhanced_skill_extractor import EnhancedSkillExtractor
         extractor = EnhancedSkillExtractor()
         resume_skills = extractor.extract_skills_with_context(request.resume_text)
@@ -347,9 +362,8 @@ async def match_realtime(request: MatchRequest):
             "job_skills": [],
         }
 
-        # Return shape expected by the frontend JobMatches component
         return {
-            "matched_jobs": validated_matches,           # frontend reads data.matched_jobs
+            "matched_jobs": validated_matches,
             "total_jobs_fetched": stats_after.get("total_jobs", len(validated_matches)),
             "total_jobs_indexed": stats_after.get("total_jobs", len(validated_matches)),
             "search_query": request.job_query or "",
@@ -370,7 +384,6 @@ async def _refresh_jobs(resume_text: str, location: str, job_query: str = None, 
         from backend.services.matcher import get_job_matcher
 
         matcher = get_job_matcher()
-        # Use the explicit query if provided, otherwise infer from resume
         target_role = job_query.strip() if job_query else matcher._extract_target_role(resume_text)
 
         scraper = get_job_scraper()
@@ -394,12 +407,10 @@ async def generate_roadmap(request: RoadmapRequest):
         from backend.services.roadmap_generator import get_roadmap_generator
         from backend.services.enhanced_skill_extractor import EnhancedSkillExtractor
 
-        # Extract skills if gaps not provided
         skill_gaps = request.skill_gaps
         if not skill_gaps:
             extractor = EnhancedSkillExtractor()
             skills = extractor.extract_skills_with_context(request.resume_text)
-            # Simulate gaps based on target role
             skill_gaps = [s["skill"] for s in skills[:5]] if skills else ["Python", "SQL", "System Design"]
 
         generator = get_roadmap_generator()
@@ -410,7 +421,6 @@ async def generate_roadmap(request: RoadmapRequest):
             request.duration_weeks,
         )
 
-        # Add uncertainty validation
         from backend.services.uncertainty_handler import get_uncertainty_handler
         uh = get_uncertainty_handler()
         _, report = uh.wrap_roadmap(roadmap)
@@ -420,7 +430,40 @@ async def generate_roadmap(request: RoadmapRequest):
             "_confidence": report.to_dict(),
         }
     except Exception as e:
-        logger.error(f"Roadmap generation error: {e}")
+        logger.error(f"Roadmap generation error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PROJECT SUGGESTIONS ENDPOINT
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ProjectRequest(BaseModel):
+    resume_text: str
+    target_role: str
+    skill_gaps: Optional[List[str]] = None
+    difficulty: Optional[str] = "intermediate"
+    num_projects: int = 5
+
+
+@app.post("/projects/suggest")
+async def suggest_projects(request: ProjectRequest):
+    """Suggest portfolio projects based on skill gaps."""
+    try:
+        from backend.services.project_generator import get_project_generator
+        generator = get_project_generator()
+
+        projects = generator.suggest_projects(
+            resume_text=request.resume_text,
+            target_role=request.target_role,
+            skill_gaps=request.skill_gaps or [],
+            difficulty=request.difficulty,
+            num_projects=request.num_projects,
+        )
+
+        return {"projects": projects}
+    except Exception as e:
+        logger.error(f"Project suggestion error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -444,7 +487,7 @@ async def interview_questions(request: InterviewRequest):
 
         return {"questions": questions}
     except Exception as e:
-        logger.error(f"Question generation error: {e}")
+        logger.error(f"Question generation error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -464,7 +507,7 @@ async def evaluate_answer(request: InterviewAnswerRequest):
 
         return result
     except Exception as e:
-        logger.error(f"Answer evaluation error: {e}")
+        logger.error(f"Answer evaluation error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -472,8 +515,8 @@ async def evaluate_answer(request: InterviewAnswerRequest):
 # JOB COACH (CHAT) ENDPOINTS
 # ─────────────────────────────────────────────────────────────────────────────
 
-@app.post("/coach/chat")       # alias used by the frontend
-@app.post("/job-coach/chat")  # original route kept for backwards compatibility
+@app.post("/coach/chat")
+@app.post("/job-coach/chat")
 async def job_coach_chat(request: ChatRequest):
     """Chat with the AI career coach."""
     try:
@@ -485,7 +528,6 @@ async def job_coach_chat(request: ChatRequest):
             resume_text=request.resume_text,
         )
 
-        # Store session if session_id provided
         if request.session_id:
             from backend.services.state_manager import state
             state.update(request.session_id, {
@@ -495,8 +537,8 @@ async def job_coach_chat(request: ChatRequest):
             })
 
         return {
-            "reply": response,       # frontend reads data.reply
-            "response": response,    # keep for backwards compatibility
+            "reply": response,
+            "response": response,
         }
     except Exception as e:
         logger.error(f"Job coach error: {e}", exc_info=True)
@@ -522,7 +564,7 @@ async def debate_run(request: DebateRequest):
 
         return debate.to_dict(result)
     except Exception as e:
-        logger.error(f"Debate error: {e}")
+        logger.error(f"Debate error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -536,7 +578,7 @@ async def quick_critique(plan: Dict, context: Dict):
         result = debate.quick_critique(plan, context)
         return result
     except Exception as e:
-        logger.error(f"Critique error: {e}")
+        logger.error(f"Critique error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -586,39 +628,33 @@ class InterviewStageBody(BaseModel):
     notes: str = ""
 
 
-# ── GET summary / full / analytics ──────────────────────────────────────────
-
 @app.get("/progress/{user_id}/summary")
 @app.get("/progress/{user_id}")
 async def get_progress_summary(user_id: str):
-    """Get user progress summary."""
     try:
         from backend.services.progress_tracker import get_progress_tracker
         tracker = get_progress_tracker()
         return tracker.get_summary(user_id)
     except Exception as e:
-        logger.error(f"Progress summary error: {e}")
+        logger.error(f"Progress summary error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/progress/{user_id}/full")
 async def get_progress_full(user_id: str):
-    """Get full user progress state (roadmap weeks, projects, DSA, interviews)."""
     try:
         from backend.services.progress_tracker import get_progress_tracker
         tracker = get_progress_tracker()
-        # Return full state; fall back to summary if tracker doesn't have get_full
         if hasattr(tracker, "get_full"):
             return tracker.get_full(user_id)
         return tracker.get_summary(user_id)
     except Exception as e:
-        logger.error(f"Progress full error: {e}")
+        logger.error(f"Progress full error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/progress/{user_id}/interviews/analytics")
 async def get_interview_analytics(user_id: str):
-    """Get interview pipeline analytics."""
     try:
         from backend.services.progress_tracker import get_progress_tracker
         tracker = get_progress_tracker()
@@ -627,42 +663,35 @@ async def get_interview_analytics(user_id: str):
         summary = tracker.get_summary(user_id)
         return {"interviews": summary.get("interviews", [])}
     except Exception as e:
-        logger.error(f"Interview analytics error: {e}")
+        logger.error(f"Interview analytics error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ── Roadmap ──────────────────────────────────────────────────────────────────
-
 @app.post("/progress/roadmap/import")
 async def import_roadmap(body: ImportRoadmapBody):
-    """Import roadmap for user."""
     try:
         from backend.services.progress_tracker import get_progress_tracker
         tracker = get_progress_tracker()
         return tracker.import_roadmap(body.user_id, body.roadmap)
     except Exception as e:
-        logger.error(f"Roadmap import error: {e}")
+        logger.error(f"Roadmap import error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/progress/roadmap/task/update")   # frontend path
-@app.post("/progress/task/update")           # original path
+@app.post("/progress/roadmap/task/update")
+@app.post("/progress/task/update")
 async def update_task(body: TaskUpdateBody):
-    """Update task completion status."""
     try:
         from backend.services.progress_tracker import get_progress_tracker
         tracker = get_progress_tracker()
         return tracker.update_task(body.user_id, body.week_key, body.task_id, body.done)
     except Exception as e:
-        logger.error(f"Task update error: {e}")
+        logger.error(f"Task update error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ── Projects ─────────────────────────────────────────────────────────────────
-
 @app.post("/progress/projects/import")
 async def import_projects(body: ImportProjectsBody):
-    """Import project suggestions into user's tracker."""
     try:
         from backend.services.progress_tracker import get_progress_tracker
         tracker = get_progress_tracker()
@@ -670,13 +699,12 @@ async def import_projects(body: ImportProjectsBody):
             return tracker.import_projects(body.user_id, body.projects)
         return {"status": "ok", "imported": len(body.projects)}
     except Exception as e:
-        logger.error(f"Projects import error: {e}")
+        logger.error(f"Projects import error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.patch("/progress/projects/update")
 async def update_project(body: ProjectUpdateBody):
-    """Update a project entry."""
     try:
         from backend.services.progress_tracker import get_progress_tracker
         tracker = get_progress_tracker()
@@ -693,48 +721,40 @@ async def update_project(body: ProjectUpdateBody):
             return tracker.update_project(body.user_id, body.project_id, updates)
         return {"status": "ok"}
     except Exception as e:
-        logger.error(f"Project update error: {e}")
+        logger.error(f"Project update error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ── DSA ───────────────────────────────────────────────────────────────────────
-
-@app.post("/progress/dsa/bulk-update")   # frontend path
-@app.post("/progress/dsa/log")           # original path
+@app.post("/progress/dsa/bulk-update")
+@app.post("/progress/dsa/log")
 async def bulk_update_dsa(body: DSABulkUpdateBody):
-    """Bulk-update DSA solved count for a topic."""
     try:
         from backend.services.progress_tracker import get_progress_tracker
         tracker = get_progress_tracker()
         if hasattr(tracker, "bulk_update_dsa"):
             return tracker.bulk_update_dsa(body.user_id, body.topic, body.solved_count)
-        # Fallback: log N problems
         for i in range(body.solved_count):
             tracker.log_dsa_problem(body.user_id, body.topic, f"problem_{i+1}", "medium", True)
         return {"status": "ok", "logged": body.solved_count}
     except Exception as e:
-        logger.error(f"DSA bulk update error: {e}")
+        logger.error(f"DSA bulk update error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ── Interviews ────────────────────────────────────────────────────────────────
-
-@app.post("/progress/interviews/add")   # frontend path
-@app.post("/progress/interview/add")    # original path
+@app.post("/progress/interviews/add")
+@app.post("/progress/interview/add")
 async def add_interview(body: InterviewAddBody):
-    """Add job application/interview entry."""
     try:
         from backend.services.progress_tracker import get_progress_tracker
         tracker = get_progress_tracker()
         return tracker.add_interview(body.user_id, body.company, body.role, body.source)
     except Exception as e:
-        logger.error(f"Interview add error: {e}")
+        logger.error(f"Interview add error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.patch("/progress/interviews/stage")
 async def update_interview_stage(body: InterviewStageBody):
-    """Update interview pipeline stage."""
     try:
         from backend.services.progress_tracker import get_progress_tracker
         tracker = get_progress_tracker()
@@ -742,13 +762,12 @@ async def update_interview_stage(body: InterviewStageBody):
             return tracker.update_interview_stage(body.user_id, body.interview_id, body.new_stage, body.notes)
         return {"status": "ok"}
     except Exception as e:
-        logger.error(f"Interview stage update error: {e}")
+        logger.error(f"Interview stage update error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.delete("/progress/interviews/{user_id}/{interview_id}")
 async def delete_interview(user_id: str, interview_id: str):
-    """Delete an interview entry."""
     try:
         from backend.services.progress_tracker import get_progress_tracker
         tracker = get_progress_tracker()
@@ -756,7 +775,7 @@ async def delete_interview(user_id: str, interview_id: str):
             return tracker.delete_interview(user_id, interview_id)
         return {"status": "ok"}
     except Exception as e:
-        logger.error(f"Interview delete error: {e}")
+        logger.error(f"Interview delete error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -773,35 +792,29 @@ class FeedbackBody(BaseModel):
 
 @app.post("/feedback/record")
 async def record_feedback(body: FeedbackBody):
-    """Record user feedback signal."""
     try:
         from backend.services.feedback_engine import get_feedback_engine
         engine = get_feedback_engine()
-
         weights = engine.record(
             user_id=body.user_id,
             signal_type=body.signal_type,
             item_id=body.item_id,
             metadata=body.metadata,
         )
-
         return {"weights": weights}
     except Exception as e:
-        logger.error(f"Feedback record error: {e}")
+        logger.error(f"Feedback record error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/feedback/stats/{user_id}")
 async def feedback_stats(user_id: str):
-    """Get feedback statistics for user."""
     try:
         from backend.services.feedback_engine import get_feedback_engine
         engine = get_feedback_engine()
-
-        stats = engine.get_stats(user_id)
-        return stats
+        return engine.get_stats(user_id)
     except Exception as e:
-        logger.error(f"Feedback stats error: {e}")
+        logger.error(f"Feedback stats error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -811,34 +824,23 @@ async def feedback_stats(user_id: str):
 
 @app.post("/orchestrator/run")
 async def orchestrator_run(goal: str, user_id: str = "", extra_context: Optional[Dict] = None):
-    """Run the agent orchestrator for a goal."""
     try:
         from backend.services.agent_orchestrator import get_orchestrator
         orchestrator = get_orchestrator()
-
-        result = orchestrator.run_goal(
-            goal=goal,
-            user_id=user_id,
-            extra_context=extra_context,
-        )
-
-        return result
+        return orchestrator.run_goal(goal=goal, user_id=user_id, extra_context=extra_context)
     except Exception as e:
-        logger.error(f"Orchestrator error: {e}")
+        logger.error(f"Orchestrator error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/orchestrator/plan")
 async def orchestrator_plan(user_intent: str, user_id: str = ""):
-    """Plan tasks from user intent."""
     try:
         from backend.services.agent_orchestrator import get_orchestrator
         orchestrator = get_orchestrator()
-
-        result = orchestrator.plan_from_intent(user_intent, user_id)
-        return result
+        return orchestrator.plan_from_intent(user_intent, user_id)
     except Exception as e:
-        logger.error(f"Planning error: {e}")
+        logger.error(f"Planning error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -852,20 +854,20 @@ class MarketInsightsRequest(BaseModel):
     location: str = "India"
 
 
-@app.post("/insights/market")   # frontend uses POST with JSON body
-@app.get("/insights/market")    # keep GET for backwards compatibility
+@app.post("/insights/market")
+@app.get("/insights/market")
 @app.post("/market/insights")
 @app.get("/market/insights")
-async def market_insights(request: Optional[MarketInsightsRequest] = None,
-                          role: Optional[str] = None,
-                          skills: Optional[str] = None,
-                          location: str = "India"):
-    """Get market insights for a role."""
+async def market_insights(
+    request: Optional[MarketInsightsRequest] = None,
+    role: Optional[str] = None,
+    skills: Optional[str] = None,
+    location: str = "India",
+):
     try:
         from backend.services.market_insights import get_market_insights
         insights = get_market_insights()
 
-        # Support both JSON body (POST) and query params (GET)
         if request is not None:
             _role = request.role
             _skills = request.skills
@@ -875,8 +877,7 @@ async def market_insights(request: Optional[MarketInsightsRequest] = None,
             _skills = skills.split(",") if skills else None
             _location = location
 
-        result = insights.get_insights(_role, _skills, _location)
-        return result
+        return insights.get_insights(_role, _skills, _location)
     except Exception as e:
         logger.error(f"Market insights error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -888,7 +889,6 @@ async def market_insights(request: Optional[MarketInsightsRequest] = None,
 
 @app.post("/skills/extract")
 async def extract_skills(text: str, enhanced: bool = True):
-    """Extract skills from text."""
     try:
         if enhanced:
             from backend.services.enhanced_skill_extractor import EnhancedSkillExtractor
@@ -897,22 +897,19 @@ async def extract_skills(text: str, enhanced: bool = True):
         else:
             from backend.services.skill_tool import extract_skills_fast
             skills = extract_skills_fast(text)
-
         return {"skills": skills}
     except Exception as e:
-        logger.error(f"Skill extraction error: {e}")
+        logger.error(f"Skill extraction error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/skills/gap")
 async def skills_gap(resume_text: str, job_description: str):
-    """Compute skill gap between resume and job description."""
     try:
         from backend.services.skill_tool import skills_gap
-        result = skills_gap(resume_text, job_description)
-        return result
+        return skills_gap(resume_text, job_description)
     except Exception as e:
-        logger.error(f"Skills gap error: {e}")
+        logger.error(f"Skills gap error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -928,11 +925,10 @@ class ResumeRewriteRequest(BaseModel):
 
 @app.post("/resume/rewrite")
 async def rewrite_resume(request: ResumeRewriteRequest):
-    """Rewrite resume for ATS optimization."""
     try:
         from backend.services.resume_rewriter import resume_rewriter
         result = resume_rewriter.rewrite(request.resume_text, request.target_role, request.tone)
-        return {"result": result}      # frontend reads data.result
+        return {"result": result}
     except Exception as e:
         logger.error(f"Resume rewrite error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -970,12 +966,11 @@ class MentorBookBody(BaseModel):
     mentor_domain: Optional[str] = None
 
 
-@app.post("/mentor/search")    # frontend uses POST with JSON body
-@app.get("/mentor/search")     # keep GET for backwards compatibility
+@app.post("/mentor/search")
+@app.get("/mentor/search")
 @app.post("/mentors/search")
 @app.get("/mentors/search")
 async def search_mentors(body: Optional[MentorSearchBody] = None):
-    """Search for mentors."""
     try:
         from backend.services.mentor_service import get_mentor_service
         service = get_mentor_service()
@@ -993,30 +988,29 @@ async def search_mentors(body: Optional[MentorSearchBody] = None):
         else:
             results = service.search_mentors()
 
-        # Ensure all results are serializable
-        serializable_results = []
-        for mentor in results:
-            serializable_mentor = {
-                "mentor_id": mentor.get("mentor_id", ""),
-                "name": mentor.get("name", ""),
-                "title": mentor.get("title", ""),
-                "company": mentor.get("company", ""),
-                "location": mentor.get("location", ""),
-                "country": mentor.get("country", ""),
-                "timezone": mentor.get("timezone", ""),
-                "languages": mentor.get("languages", []),
-                "expertise": mentor.get("expertise", []),
-                "industries": mentor.get("industries", []),
-                "experience_years": mentor.get("experience_years", 0),
-                "hourly_rate": mentor.get("hourly_rate", 0),
-                "currency": mentor.get("currency", "USD"),
-                "bio": mentor.get("bio", ""),
-                "available": mentor.get("available", True),
-                "rating": mentor.get("rating", 0),
-                "total_sessions": mentor.get("total_sessions", 0),
-                "languages_spoken": mentor.get("languages_spoken", [])
+        serializable_results = [
+            {
+                "mentor_id": m.get("mentor_id", ""),
+                "name": m.get("name", ""),
+                "title": m.get("title", ""),
+                "company": m.get("company", ""),
+                "location": m.get("location", ""),
+                "country": m.get("country", ""),
+                "timezone": m.get("timezone", ""),
+                "languages": m.get("languages", []),
+                "expertise": m.get("expertise", []),
+                "industries": m.get("industries", []),
+                "experience_years": m.get("experience_years", 0),
+                "hourly_rate": m.get("hourly_rate", 0),
+                "currency": m.get("currency", "USD"),
+                "bio": m.get("bio", ""),
+                "available": m.get("available", True),
+                "rating": m.get("rating", 0),
+                "total_sessions": m.get("total_sessions", 0),
+                "languages_spoken": m.get("languages_spoken", []),
             }
-            serializable_results.append(serializable_mentor)
+            for m in results
+        ]
 
         return {"mentors": serializable_results}
     except Exception as e:
@@ -1027,18 +1021,15 @@ async def search_mentors(body: Optional[MentorSearchBody] = None):
 @app.post("/mentor/book")
 @app.post("/mentors/book")
 async def book_mentor(body: MentorBookBody):
-    """Book a mentoring session."""
     try:
         from backend.services.mentor_service import get_mentor_service
         service = get_mentor_service()
 
-        # Validate required fields
         if not body.mentor_id:
             raise HTTPException(status_code=400, detail="mentor_id is required")
         if not body.user_id:
             raise HTTPException(status_code=400, detail="user_id is required")
 
-        # Get session date and time from either field
         session_date = body.session_date or body.date
         session_time = body.session_time or body.time
 
@@ -1057,11 +1048,9 @@ async def book_mentor(body: MentorBookBody):
             notes=body.notes,
         )
 
-        # Ensure result is serializable
         if "error" in result:
             raise HTTPException(status_code=400, detail=result["error"])
 
-        # Convert datetime objects to strings for JSON serialization
         if "created_at" in result and hasattr(result["created_at"], "isoformat"):
             result["created_at"] = result["created_at"].isoformat()
 
@@ -1075,15 +1064,12 @@ async def book_mentor(body: MentorBookBody):
 
 @app.get("/mentors/sessions/{user_id}")
 async def get_user_sessions(user_id: str):
-    """Get user's mentoring sessions."""
     try:
         from backend.services.mentor_service import get_mentor_service
         service = get_mentor_service()
-
-        sessions = service.get_user_sessions(user_id)
-        return {"sessions": sessions}
+        return {"sessions": service.get_user_sessions(user_id)}
     except Exception as e:
-        logger.error(f"Sessions error: {e}")
+        logger.error(f"Sessions error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1093,7 +1079,6 @@ async def get_user_sessions(user_id: str):
 
 @app.websocket("/ws/room/{room_id}/{role}")
 async def websocket_room(websocket: WebSocket, room_id: str, role: str):
-    """WebSocket endpoint for mentor matching rooms."""
     from backend.services.live_session import signaling
 
     if role not in ("mentor", "candidate"):
@@ -1107,9 +1092,7 @@ async def websocket_room(websocket: WebSocket, room_id: str, role: str):
         while True:
             data = await websocket.receive_text()
             message = json.loads(data)
-
             msg_type = message.get("type")
-
             if msg_type in ("offer", "answer", "ice-candidate", "chat"):
                 await signaling.relay(room_id, role, {**message, "from": role})
             elif msg_type == "leave":
@@ -1122,7 +1105,6 @@ async def websocket_room(websocket: WebSocket, room_id: str, role: str):
 
 @app.websocket("/ws/interview/{session_id}")
 async def websocket_interview_session(websocket: WebSocket, session_id: str):
-    """WebSocket endpoint for interview sessions (backward compatibility)."""
     from backend.services.live_session import signaling
 
     await websocket.accept()
@@ -1139,7 +1121,6 @@ async def websocket_interview_session(websocket: WebSocket, session_id: str):
             data = await websocket.receive_text()
             message = json.loads(data)
             msg_type = message.get("type")
-
             if msg_type in ("offer", "answer", "ice-candidate", "chat"):
                 await signaling.relay(session_id, role, {**message, "from": role})
             elif msg_type == "leave":
@@ -1156,38 +1137,32 @@ async def websocket_interview_session(websocket: WebSocket, session_id: str):
 
 @app.get("/tn-automotive/roles")
 async def tn_automotive_roles():
-    """List available TN automotive job roles."""
     try:
         from backend.services.tn_automotive_taxonomy import tn_extractor
-        roles = tn_extractor.list_roles()
-        return {"roles": roles}
+        return {"roles": tn_extractor.list_roles()}
     except Exception as e:
-        logger.error(f"Roles error: {e}")
+        logger.error(f"Roles error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/tn-automotive/extract-skills")
 async def tn_automotive_extract_skills(text: str):
-    """Extract TN automotive skills from text."""
     try:
         from backend.services.tn_automotive_taxonomy import tn_extractor
-        skills = tn_extractor.extract_skills(text)
-        return {"skills": skills}
+        return {"skills": tn_extractor.extract_skills(text)}
     except Exception as e:
-        logger.error(f"Extract error: {e}")
+        logger.error(f"Extract error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/tn-automotive/gap-analysis")
 async def tn_automotive_gap_analysis(text: str, role_name: str):
-    """Analyze skill gaps for a TN automotive role."""
     try:
         from backend.services.tn_automotive_taxonomy import tn_extractor
         skills = tn_extractor.extract_skills(text)
-        analysis = tn_extractor.get_skill_gaps_for_role(skills, role_name)
-        return analysis
+        return tn_extractor.get_skill_gaps_for_role(skills, role_name)
     except Exception as e:
-        logger.error(f"Gap analysis error: {e}")
+        logger.error(f"Gap analysis error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1197,266 +1172,196 @@ async def tn_automotive_gap_analysis(text: str, role_name: str):
 
 @app.post("/session/init")
 async def init_session():
-    """Initialize a new user session."""
-    session_id = str(uuid.uuid4())
-    return {"session_id": session_id}
+    return {"session_id": str(uuid.uuid4())}
 
 
 @app.get("/session/{session_id}")
 async def get_session(session_id: str):
-    """Get session state."""
     try:
         from backend.services.state_manager import state
-        snapshot = state.snapshot(session_id)
-        return snapshot
+        return state.snapshot(session_id)
     except Exception as e:
-        logger.error(f"Session error: {e}")
+        logger.error(f"Session error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post( "/admin/reset-vector-store" )
-async def admin_reset_vector_store () :
-    """
-    Reset vector store to fix dimension mismatch.
-    Call this ONCE after switching embedding models.
-    """
-    try :
+# ─────────────────────────────────────────────────────────────────────────────
+# ADMIN / VECTOR STORE ENDPOINTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.post("/admin/reset-vector-store")
+async def admin_reset_vector_store():
+    """Reset vector store to fix dimension mismatch. Call once after switching embedding models."""
+    try:
         import shutil
         from backend.config import settings
         from pathlib import Path
 
-        chroma_dir = Path( settings.CHROMA_PERSIST_DIR )
-        if chroma_dir.exists() :
-            shutil.rmtree( chroma_dir )
-            logger.info( f"Deleted {chroma_dir}" )
-            chroma_dir.mkdir( parents=True, exist_ok=True )
+        chroma_dir = Path(settings.CHROMA_PERSIST_DIR)
+        if chroma_dir.exists():
+            shutil.rmtree(chroma_dir)
+            logger.info(f"Deleted {chroma_dir}")
+            chroma_dir.mkdir(parents=True, exist_ok=True)
 
-        # Reinitialize vector store
         from backend.services.vector_store import vector_store
-        from backend.services.vector_store import VectorStore
-
-        # Force reinitialization
         vector_store.clear()
 
         return {
-            "status" : "success",
-            "message" : "Vector store reset. The next match request will re-index jobs.",
-            "directory" : str( chroma_dir )
+            "status": "success",
+            "message": "Vector store reset. The next match request will re-index jobs.",
+            "directory": str(chroma_dir),
         }
-    except Exception as e :
-        logger.error( f"Reset error: {e}" )
-        raise HTTPException( status_code=500, detail=str( e ) )
+    except Exception as e:
+        logger.error(f"Reset error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post( "/admin/refresh-jobs" )
-async def admin_refresh_jobs ( resume_text: str = "", location: str = "India" ) :
-    """
-    Manually refresh jobs in vector store.
-    """
-    try :
+@app.post("/admin/refresh-jobs")
+async def admin_refresh_jobs(resume_text: str = "", location: str = "India"):
+    """Manually refresh jobs in vector store."""
+    try:
         from backend.services.job_scraper import get_job_scraper
         from backend.services.vector_store import vector_store
         from backend.services.matcher import get_job_matcher
 
-        # Extract target role from resume or use default
-        if resume_text :
-            matcher = get_job_matcher()
-            target_role = matcher._extract_target_role( resume_text )
-        else :
-            target_role = "Software Engineer"
+        matcher = get_job_matcher()
+        target_role = matcher._extract_target_role(resume_text) if resume_text else "Software Engineer"
 
         scraper = get_job_scraper()
-        jobs = scraper.fetch_jobs( query=target_role, location=location, num_jobs=50 )
+        jobs = scraper.fetch_jobs(query=target_role, location=location, num_jobs=50)
 
-        if jobs :
-            indexed = vector_store.index_jobs( jobs )
+        if jobs:
+            indexed = vector_store.index_jobs(jobs)
             return {
-                "status" : "success",
-                "jobs_fetched" : len( jobs ),
-                "jobs_indexed" : indexed,
-                "target_role" : target_role,
-                "total_jobs" : vector_store.get_stats()["total_jobs"]
+                "status": "success",
+                "jobs_fetched": len(jobs),
+                "jobs_indexed": indexed,
+                "target_role": target_role,
+                "total_jobs": vector_store.get_stats()["total_jobs"],
             }
-        else :
-            return {"status" : "error", "message" : "No jobs found"}
-    except Exception as e :
-        logger.error( f"Refresh jobs error: {e}" )
-        raise HTTPException( status_code=500, detail=str( e ) )
+        return {"status": "error", "message": "No jobs found"}
+    except Exception as e:
+        logger.error(f"Refresh jobs error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# VECTOR STORE MANAGEMENT ENDPOINTS
-# ─────────────────────────────────────────────────────────────────────────────
-
-@app.get( "/vector-store/status" )
-async def vector_store_status () :
-    """Check vector store status and contents."""
-    try :
+@app.get("/vector-store/status")
+async def vector_store_status():
+    try:
         from backend.services.vector_store import vector_store
         stats = vector_store.get_stats()
 
-        # Get a sample of jobs
         sample = []
-        if stats["total_jobs"] > 0 :
-            try :
-                sample_jobs = vector_store.search( "software", top_k=3 )
+        if stats["total_jobs"] > 0:
+            try:
+                sample_jobs = vector_store.search("software", top_k=3)
                 sample = [
-                    {
-                        "title" : j.get( "title", "" ),
-                        "company" : j.get( "company", "" ),
-                        "location" : j.get( "location", "" )
-                    }
+                    {"title": j.get("title", ""), "company": j.get("company", ""), "location": j.get("location", "")}
                     for j in sample_jobs
                 ]
-            except Exception as e :
-                sample = [{"error" : str( e )}]
+            except Exception as e:
+                sample = [{"error": str(e)}]
 
         return {
-            "total_jobs" : stats["total_jobs"],
-            "freshness" : stats.get( "freshness", "unknown" ),
-            "embedder" : stats.get( "embedder", "unknown" ),
-            "sample_jobs" : sample,
-            "collection_exists" : True
+            "total_jobs": stats["total_jobs"],
+            "freshness": stats.get("freshness", "unknown"),
+            "embedder": stats.get("embedder", "unknown"),
+            "sample_jobs": sample,
+            "collection_exists": True,
         }
-    except Exception as e :
-        logger.error( f"Status error: {e}" )
-        return {"error" : str( e ), "total_jobs" : 0}
+    except Exception as e:
+        logger.error(f"Status error: {e}", exc_info=True)
+        return {"error": str(e), "total_jobs": 0}
 
 
-@app.post( "/admin/reset-vector-store" )
-async def admin_reset_vector_store () :
-    """
-    Reset vector store to fix dimension mismatch.
-    Call this ONCE after switching embedding models.
-    """
-    try :
-        import shutil
-        from backend.config import settings
-        from pathlib import Path
-
-        chroma_dir = Path( settings.CHROMA_PERSIST_DIR )
-        if chroma_dir.exists() :
-            shutil.rmtree( chroma_dir )
-            logger.info( f"Deleted {chroma_dir}" )
-            chroma_dir.mkdir( parents=True, exist_ok=True )
-
-        # Reinitialize vector store
-        from backend.services.vector_store import vector_store
-        vector_store.clear()
-
-        return {
-            "status" : "success",
-            "message" : "Vector store reset. The next match request will re-index jobs.",
-            "directory" : str( chroma_dir )
-        }
-    except Exception as e :
-        logger.error( f"Reset error: {e}" )
-        raise HTTPException( status_code=500, detail=str( e ) )
-
-
-@app.post( "/admin/force-refresh-jobs" )
-async def admin_force_refresh_jobs (
-        query: str = "Software Engineer",
-        location: str = "India",
-        num_jobs: int = 30
-) :
-    """Force refresh jobs - clear and re-index."""
-    try :
+@app.post("/admin/force-refresh-jobs")
+async def admin_force_refresh_jobs(
+    query: str = "Software Engineer",
+    location: str = "India",
+    num_jobs: int = 30,
+):
+    try:
         from backend.services.job_scraper import get_job_scraper
         from backend.services.vector_store import vector_store
 
-        logger.info( f"Force refreshing jobs for query: {query}, location: {location}" )
-
-        # Clear existing jobs
         vector_store.clear()
-        logger.info( "Cleared existing jobs" )
 
-        # Fetch fresh jobs
         scraper = get_job_scraper()
-        jobs = scraper.fetch_jobs(
-            query=query,
-            location=location,
-            num_jobs=num_jobs,
-            days_old=30
-        )
+        jobs = scraper.fetch_jobs(query=query, location=location, num_jobs=num_jobs, days_old=30)
 
-        logger.info( f"Fetched {len( jobs )} jobs from scraper" )
+        if not jobs:
+            return {"status": "error", "message": f"No jobs found for query '{query}' in {location}", "jobs_fetched": 0}
 
-        if not jobs :
-            return {
-                "status" : "error",
-                "message" : f"No jobs found for query '{query}' in {location}",
-                "jobs_fetched" : 0
-            }
-
-        # Index jobs
-        indexed = vector_store.index_jobs( jobs )
-
-        # Verify indexing worked
+        indexed = vector_store.index_jobs(jobs)
         final_stats = vector_store.get_stats()
 
         return {
-            "status" : "success",
-            "query" : query,
-            "location" : location,
-            "jobs_fetched" : len( jobs ),
-            "jobs_indexed" : indexed,
-            "total_jobs_in_store" : final_stats["total_jobs"],
-            "sample_job" : jobs[0] if jobs else None
+            "status": "success",
+            "query": query,
+            "location": location,
+            "jobs_fetched": len(jobs),
+            "jobs_indexed": indexed,
+            "total_jobs_in_store": final_stats["total_jobs"],
+            "sample_job": jobs[0] if jobs else None,
         }
+    except Exception as e:
+        logger.error(f"Force refresh error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
-    except Exception as e :
-        logger.error( f"Force refresh error: {e}", exc_info=True )
-        raise HTTPException( status_code=500, detail=str( e ) )
 
-
-@app.post( "/admin/seed-mock-jobs" )
-async def admin_seed_mock_jobs ( query: str = "Software Engineer", location: str = "India", num_jobs: int = 20 ) :
-    """Seed vector store with mock jobs for testing."""
-    try :
+@app.post("/admin/seed-mock-jobs")
+async def admin_seed_mock_jobs(
+    query: str = "Software Engineer",
+    location: str = "India",
+    num_jobs: int = 20,
+):
+    try:
+        from datetime import datetime
         from backend.services.vector_store import vector_store
 
-        # Clear existing
         vector_store.clear()
 
-        # Generate mock jobs directly
-        mock_jobs = []
         roles = [
             f"Senior {query}", f"Junior {query}", f"Lead {query}",
             f"{query} Specialist", f"{query} Developer", f"Principal {query}",
-            f"{query} Architect", f"{query} Consultant", f"Staff {query}"
+            f"{query} Architect", f"{query} Consultant", f"Staff {query}",
         ]
         companies = ["Google", "Microsoft", "Amazon", "Apple", "Meta", "Netflix", "Tesla"]
 
-        for i in range( num_jobs ) :
-            job_id = f"seed_job_{i}"
-            mock_jobs.append( {
-                "id" : job_id,
-                "title" : roles[i % len( roles )],
-                "company" : companies[i % len( companies )],
-                "location" : location,
-                "description" : f"We are hiring a {roles[i % len( roles )]} at {companies[i % len( companies )]}. "
-                                f"Requirements: Experience in {query}, strong coding skills, team player.",
-                "apply_link" : f"https://example.com/jobs/{job_id}",
-                "posted_at" : f"{i + 1} days ago",
-                "employment_type" : "Full-time",
-                "days_old" : i,
-                "fetched_at" : datetime.now().isoformat(),
-            } )
+        mock_jobs = [
+            {
+                "id": f"seed_job_{i}",
+                "title": roles[i % len(roles)],
+                "company": companies[i % len(companies)],
+                "location": location,
+                "description": (
+                    f"We are hiring a {roles[i % len(roles)]} at {companies[i % len(companies)]}. "
+                    f"Requirements: Experience in {query}, strong coding skills, team player."
+                ),
+                "apply_link": f"https://example.com/jobs/seed_job_{i}",
+                "posted_at": f"{i + 1} days ago",
+                "employment_type": "Full-time",
+                "days_old": i,
+                "fetched_at": datetime.now().isoformat(),
+            }
+            for i in range(num_jobs)
+        ]
 
-        indexed = vector_store.index_jobs( mock_jobs )
+        indexed = vector_store.index_jobs(mock_jobs)
 
         return {
-            "status" : "success",
-            "jobs_created" : len( mock_jobs ),
-            "jobs_indexed" : indexed,
-            "total_jobs" : vector_store.get_stats()["total_jobs"]
+            "status": "success",
+            "jobs_created": len(mock_jobs),
+            "jobs_indexed": indexed,
+            "total_jobs": vector_store.get_stats()["total_jobs"],
         }
-    except Exception as e :
-        logger.error( f"Seed error: {e}" )
-        raise HTTPException( status_code=500, detail=str( e ) )
+    except Exception as e:
+        logger.error(f"Seed error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ─────────────────────────────────────────────────────────────────────────────
-# INTERVIEW — LIVE REST ENDPOINTS  (/interview/live/start, /interview/live/next)
+# LIVE INTERVIEW ENDPOINTS
 # ─────────────────────────────────────────────────────────────────────────────
 
 class LiveInterviewStartRequest(BaseModel):
@@ -1473,18 +1378,16 @@ class LiveInterviewNextRequest(BaseModel):
 
 @app.post("/interview/live/start")
 async def live_interview_start(request: LiveInterviewStartRequest):
-    """Start a live AI mock-interview session and return the first question."""
     try:
         from backend.services.live_session import interview_engine
-        session_id = str(__import__("uuid").uuid4())
-        result = interview_engine.start_session(
+        session_id = str(uuid.uuid4())
+        return interview_engine.start_session(
             session_id=session_id,
             role=request.role,
             interview_type=request.interview_type,
             resume_text=request.resume_text,
             num_questions=request.num_questions,
         )
-        return result
     except Exception as e:
         logger.error(f"Live interview start error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -1492,21 +1395,19 @@ async def live_interview_start(request: LiveInterviewStartRequest):
 
 @app.post("/interview/live/next")
 async def live_interview_next(request: LiveInterviewNextRequest):
-    """Submit answer transcript and get the next question (or final summary)."""
     try:
         from backend.services.live_session import interview_engine
-        result = interview_engine.next_question(
+        return interview_engine.next_question(
             session_id=request.session_id,
             transcript=request.transcript,
         )
-        return result
     except Exception as e:
         logger.error(f"Live interview next error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# HR PANEL GENERATOR  (self-contained — produces the exact shape HRResults needs)
+# HR PANEL GENERATOR
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _generate_hr_panel(
@@ -1516,19 +1417,11 @@ def _generate_hr_panel(
     focus_area: Optional[str] = None,
     num_questions: int = 8,
 ) -> Dict:
-    """
-    Call the LLM to produce a full HR recruiter panel in the exact JSON shape
-    that the frontend HRResults component expects:
-      hire_verdict, verdict_summary, verdict_confidence,
-      dimension_scores, green_flags, red_flags,
-      questions_to_ask, salary_bracket_inr,
-      suggested_interview_rounds, recruiter_notes
-    """
     import re as _re
     from backend.services.llm import llm_call_sync
 
     company_ctx = company_type or "mid-size"
-    focus_ctx   = focus_area   or "general"
+    focus_ctx = focus_area or "general"
 
     prompt = f"""You are a senior HR recruiter at a {company_ctx} tech company doing a {focus_ctx} evaluation.
 Analyse the resume below for the role of "{target_role}" and return ONLY a single valid JSON object.
@@ -1577,14 +1470,13 @@ questions_to_ask must have exactly {num_questions} items, type must be one of: t
             max_tokens=2000,
         )
     except Exception as e:
-        logger.error(f"HR panel LLM call failed: {e}")
+        logger.error(f"HR panel LLM call failed: {e}", exc_info=True)
         return _hr_panel_fallback(target_role, company_type)
 
-    # ── Clean response ────────────────────────────────────────────────────────
     raw = _re.sub(r'```json\s*', '', raw or '')
     raw = _re.sub(r'```\s*', '', raw)
     start = raw.find('{')
-    end   = raw.rfind('}')
+    end = raw.rfind('}')
     if start >= 0 and end > start:
         raw = raw[start:end + 1]
     else:
@@ -1593,12 +1485,10 @@ questions_to_ask must have exactly {num_questions} items, type must be one of: t
     raw = _re.sub(r',\s*}', '}', raw)
     raw = _re.sub(r',\s*]', ']', raw)
 
-    # ── Parse ─────────────────────────────────────────────────────────────────
     result = None
     try:
         result = json.loads(raw)
     except json.JSONDecodeError:
-        # Try closing unclosed braces
         try:
             raw += '}' * (raw.count('{') - raw.count('}'))
             result = json.loads(raw)
@@ -1608,80 +1498,72 @@ questions_to_ask must have exactly {num_questions} items, type must be one of: t
     if not isinstance(result, dict):
         return _hr_panel_fallback(target_role, company_type)
 
-    # ── Validate & fill defaults ──────────────────────────────────────────────
     valid_verdicts = {"Strong Yes", "Yes", "Maybe", "No", "Strong No"}
     if result.get("hire_verdict") not in valid_verdicts:
         result["hire_verdict"] = "Maybe"
 
-    result.setdefault("verdict_summary",   "Resume reviewed by AI recruiter.")
+    result.setdefault("verdict_summary", "Resume reviewed by AI recruiter.")
     result.setdefault("verdict_confidence", 60)
     result.setdefault("dimension_scores", {
         "technical_fit": 5, "experience_relevance": 5,
         "culture_fit": 5, "growth_potential": 5, "communication_clarity": 5,
     })
-    result.setdefault("green_flags",   [])
-    result.setdefault("red_flags",     [])
+    result.setdefault("green_flags", [])
+    result.setdefault("red_flags", [])
     result.setdefault("questions_to_ask", [])
-    result.setdefault("salary_bracket_inr",          "Market rate")
-    result.setdefault("suggested_interview_rounds",  ["HR Screening", "Technical Round"])
-    result.setdefault("recruiter_notes",             "Candidate requires further evaluation.")
+    result.setdefault("salary_bracket_inr", "Market rate")
+    result.setdefault("suggested_interview_rounds", ["HR Screening", "Technical Round"])
+    result.setdefault("recruiter_notes", "Candidate requires further evaluation.")
 
-    # Clamp confidence
     try:
         result["verdict_confidence"] = max(0, min(100, int(result["verdict_confidence"])))
     except (ValueError, TypeError):
         result["verdict_confidence"] = 60
 
-    # Clamp dimension scores to 0–10
     for k, v in result.get("dimension_scores", {}).items():
         try:
             result["dimension_scores"][k] = max(0, min(10, int(v)))
         except (ValueError, TypeError):
             result["dimension_scores"][k] = 5
 
-    # Ensure questions have required keys
-    cleaned_questions = []
     valid_types = {"technical", "behavioural", "situational"}
-    for q in result.get("questions_to_ask", []):
-        if isinstance(q, dict) and q.get("question"):
-            cleaned_questions.append({
-                "question": str(q.get("question", "")),
-                "type":     q.get("type", "behavioural") if q.get("type") in valid_types else "behavioural",
-                "reason":   str(q.get("reason", "")),
-            })
-    result["questions_to_ask"] = cleaned_questions
+    result["questions_to_ask"] = [
+        {
+            "question": str(q.get("question", "")),
+            "type": q.get("type", "behavioural") if q.get("type") in valid_types else "behavioural",
+            "reason": str(q.get("reason", "")),
+        }
+        for q in result.get("questions_to_ask", [])
+        if isinstance(q, dict) and q.get("question")
+    ]
 
     return result
 
 
 def _hr_panel_fallback(target_role: str, company_type: Optional[str]) -> Dict:
-    """Fallback HR panel when LLM call or parsing fails."""
     return {
-        "hire_verdict":            "Maybe",
-        "verdict_summary":         f"Could not fully evaluate candidate for {target_role}. Manual review recommended.",
-        "verdict_confidence":      50,
+        "hire_verdict": "Maybe",
+        "verdict_summary": f"Could not fully evaluate candidate for {target_role}. Manual review recommended.",
+        "verdict_confidence": 50,
         "dimension_scores": {
-            "technical_fit":         5,
-            "experience_relevance":  5,
-            "culture_fit":           5,
-            "growth_potential":      5,
-            "communication_clarity": 5,
+            "technical_fit": 5, "experience_relevance": 5,
+            "culture_fit": 5, "growth_potential": 5, "communication_clarity": 5,
         },
-        "green_flags":  ["Resume submitted for review"],
-        "red_flags":    ["Automated analysis incomplete — please review manually"],
+        "green_flags": ["Resume submitted for review"],
+        "red_flags": ["Automated analysis incomplete — please review manually"],
         "questions_to_ask": [
             {"question": f"Walk me through your most relevant experience for this {target_role} role.", "type": "behavioural", "reason": "Establishes baseline fit."},
-            {"question": "What motivated you to apply for this position?",                              "type": "behavioural", "reason": "Gauges genuine interest."},
-            {"question": "Describe a challenging problem you solved recently.",                         "type": "situational", "reason": "Assesses problem-solving ability."},
+            {"question": "What motivated you to apply for this position?", "type": "behavioural", "reason": "Gauges genuine interest."},
+            {"question": "Describe a challenging problem you solved recently.", "type": "situational", "reason": "Assesses problem-solving ability."},
         ],
-        "salary_bracket_inr":         "Market rate",
-        "suggested_interview_rounds":  ["HR Screening", "Technical Round", "Manager Round"],
-        "recruiter_notes":             "Automated HR panel generation encountered an error. Manual screening advised.",
+        "salary_bracket_inr": "Market rate",
+        "suggested_interview_rounds": ["HR Screening", "Technical Round", "Manager Round"],
+        "recruiter_notes": "Automated HR panel generation encountered an error. Manual screening advised.",
     }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# RESUME ANALYZER  (/resume/analyze)  +  HR PANEL  (/interview/hr-panel)
+# RESUME ANALYZER + HR PANEL ENDPOINTS
 # ─────────────────────────────────────────────────────────────────────────────
 
 class ResumeAnalyzeRequest(BaseModel):
@@ -1694,13 +1576,8 @@ class ResumeAnalyzeRequest(BaseModel):
 
 @app.post("/resume/analyze")
 async def analyze_resume(request: ResumeAnalyzeRequest):
-    """ATS score + HR panel in one call (used by ResumeAnalyzer component)."""
-    ats_result = None
-    ats_error  = None
-    hr_panel   = None
-    hr_error   = None
+    ats_result = ats_error = hr_panel = hr_error = None
 
-    # ── ATS scoring ──────────────────────────────────────────────────────────
     try:
         from backend.services.ats_scorer import get_ats_scorer
         scorer = get_ats_scorer()
@@ -1713,7 +1590,6 @@ async def analyze_resume(request: ResumeAnalyzeRequest):
         ats_error = str(e)
         logger.error(f"ATS scoring error: {e}", exc_info=True)
 
-    # ── HR panel ─────────────────────────────────────────────────────────────
     try:
         hr_panel = _generate_hr_panel(
             resume_text=request.resume_text,
@@ -1726,12 +1602,7 @@ async def analyze_resume(request: ResumeAnalyzeRequest):
         hr_error = str(e)
         logger.error(f"HR panel generation error: {e}", exc_info=True)
 
-    return {
-        "ats_result": ats_result,
-        "ats_error":  ats_error,
-        "hr_panel":   hr_panel,
-        "hr_error":   hr_error,
-    }
+    return {"ats_result": ats_result, "ats_error": ats_error, "hr_panel": hr_panel, "hr_error": hr_error}
 
 
 class HRPanelRequest(BaseModel):
@@ -1743,7 +1614,6 @@ class HRPanelRequest(BaseModel):
 
 @app.post("/interview/hr-panel")
 async def hr_panel_endpoint(request: HRPanelRequest):
-    """Generate a full HR recruiter panel for a resume + target role."""
     try:
         panel = _generate_hr_panel(
             resume_text=request.resume_text,
@@ -1759,7 +1629,7 @@ async def hr_panel_endpoint(request: HRPanelRequest):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# TN ANALYTICS  (/tn/batch-analytics)
+# TN BATCH ANALYTICS
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TNBatchAnalyticsRequest(BaseModel):
@@ -1769,7 +1639,6 @@ class TNBatchAnalyticsRequest(BaseModel):
 
 @app.post("/tn/batch-analytics")
 async def tn_batch_analytics(request: TNBatchAnalyticsRequest):
-    """Run batch skill analytics on a list of student/worker profiles."""
     try:
         from backend.services.tn_automotive_taxonomy import TNAutomotiveSkillExtractor
         taxonomy = TNAutomotiveSkillExtractor()
@@ -1783,7 +1652,7 @@ async def tn_batch_analytics(request: TNBatchAnalyticsRequest):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# RANKING / LTR PREFERENCE  (/ranking/preference)
+# RANKING / LTR PREFERENCE
 # ─────────────────────────────────────────────────────────────────────────────
 
 class RankingPreferenceBody(BaseModel):
@@ -1795,36 +1664,31 @@ class RankingPreferenceBody(BaseModel):
 
 @app.post("/ranking/preference")
 async def record_ranking_preference(body: RankingPreferenceBody):
-    """Record a pairwise preference signal for the Learning-to-Rank model."""
     try:
         from backend.services.learning_to_rank import get_ltr_engine
         engine = get_ltr_engine()
-        result = engine.record_preference(
+        return engine.record_preference(
             user_id=body.user_id,
             winner=body.winner,
             loser=body.loser,
             context=body.context,
         )
-        return result
     except Exception as e:
         logger.error(f"Ranking preference error: {e}", exc_info=True)
-        # Non-critical — return 200 so the UI doesn't surface an error
         return {"status": "skipped", "reason": str(e)}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# MENTOR DOMAINS  (/mentor/domains)
+# MENTOR DOMAINS
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.get("/mentor/domains")
 async def mentor_domains():
-    """Return the list of available mentor expertise domains."""
     try:
         from backend.services.mentor_service import get_mentor_service
         svc = get_mentor_service()
         if hasattr(svc, "get_domains"):
             return {"domains": svc.get_domains()}
-        # Fallback: derive from mentor data
         mentors = svc.search_mentors()
         domains = sorted({d for m in mentors for d in (m.get("expertise") or [])})
         return {"domains": domains}

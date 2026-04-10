@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 
-const API_BASE_URL = 'http://localhost:8000';
+import API_BASE_URL from '../config';
 
 const MentorSearch = ({ userId, userSkills = [] }) => {
   const [searchQuery, setSearchQuery] = useState('');
