@@ -1,0 +1,38 @@
+# Core Backend
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+
+# HTTP / API Clients
+httpx==0.27.0
+requests==2.31.0
+google-search-results==2.4.2
+
+# ── LLM Providers ─────────────────────────────────────────────────────────────
+# Primary — Groq (ultra-fast, generous free tier)
+groq>=0.9.0
+
+# Secondary — Anthropic (most reliable fallback)
+anthropic>=0.40.0
+
+# Tertiary — Gemini (final fallback)
+google-genai>=0.8.0
+
+# Vector Database & Embeddings
+chromadb==0.4.22
+sentence-transformers==2.3.1
+
+# Document Processing
+pdfplumber==0.10.3
+python-docx==1.1.0
+
+# Data Validation & Config
+pydantic==2.5.3
+python-dotenv==1.0.0
+
+# Google Trends
+pytrends==4.9.2
+
+# Performance
+numpy>=1.24.0
+scikit-learn>=1.3.0
