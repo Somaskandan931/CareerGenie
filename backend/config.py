@@ -3,21 +3,31 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Load environment variables from backend/.env file
-env_path = Path(__file__).parent / '.env'
-load_dotenv(dotenv_path=env_path)
+env_path = Path( __file__ ).parent / '.env'
+load_dotenv( dotenv_path=env_path )
 
 
-class Settings:
+class Settings :
     # ── Ollama Configuration (Local LLM - Primary) ────────────────────────────
-    OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-    OLLAMA_EMBEDDING_MODEL = os.getenv("OLLAMA_EMBEDDING_MODEL", "all-minilm")
-    OLLAMA_LLM_MODEL = os.getenv("OLLAMA_LLM_MODEL", "llama3.2:3b")
+    OLLAMA_HOST = os.getenv( "OLLAMA_HOST", "http://localhost:11434" )
+    OLLAMA_EMBEDDING_MODEL = os.getenv( "OLLAMA_EMBEDDING_MODEL", "all-minilm" )
+    OLLAMA_LLM_MODEL = os.getenv( "OLLAMA_LLM_MODEL", "llama3.2:3b" )
 
     # ── API Keys (Fallbacks if Ollama not available) ──────────────────────────
-    SERPAPI_KEY = os.getenv("SERPAPI_KEY") or os.getenv("SEARCHAPI_KEY")
-    GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-    ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+    SERPAPI_KEY = os.getenv( "SERPAPI_KEY" ) or os.getenv( "SEARCHAPI_KEY" )
+    GROQ_API_KEY = os.getenv( "GROQ_API_KEY" )
+    ANTHROPIC_API_KEY = os.getenv( "ANTHROPIC_API_KEY" )
+    GEMINI_API_KEY = os.getenv( "GEMINI_API_KEY" )
+
+    # ── CORS Configuration (Important for ngrok and external access) ──────────
+    # Allow all origins for testing with ngrok and Netlify
+    CORS_ORIGINS = os.getenv(
+        "CORS_ORIGINS",
+        "http://localhost:3000,http://localhost:8000,https://*.netlify.app,https://*.ngrok-free.app"
+    ).split( "," )
+
+    # Set to True to allow all origins (for testing only)
+    CORS_ALLOW_ALL = os.getenv( "CORS_ALLOW_ALL", "True" ).lower() == "true"
 
     # ── Groq Model Config (Fallback) ──────────────────────────────────────────
     GROQ_CHAT_MODEL = "llama-3.3-70b-versatile"
@@ -46,7 +56,7 @@ class Settings:
     ]
 
     # ── Vector DB ─────────────────────────────────────────────────────────────
-    CHROMA_PERSIST_DIR = str(Path(__file__).parent / "chroma_db")
+    CHROMA_PERSIST_DIR = str( Path( __file__ ).parent / "chroma_db" )
     EMBEDDING_MODEL = "all-MiniLM-L6-v2"  # Fallback if Ollama not available
 
     # ── Job Search Defaults ───────────────────────────────────────────────────
@@ -62,13 +72,13 @@ class Settings:
     # ── Feedback & Learning Engine Storage ────────────────────────────────────
     FEEDBACK_STORE_DIR = os.getenv(
         "FEEDBACK_STORE_DIR",
-        str(Path(__file__).parent.parent / "tmp" / "career_genie_feedback")
+        str( Path( __file__ ).parent.parent / "tmp" / "career_genie_feedback" )
     )
 
     # ── Learning-to-Rank Storage ──────────────────────────────────────────────
     LTR_STORE_DIR = os.getenv(
         "LTR_STORE_DIR",
-        str(Path(__file__).parent.parent / "tmp" / "career_genie_ltr")
+        str( Path( __file__ ).parent.parent / "tmp" / "career_genie_ltr" )
     )
 
     # ── Tech Skills for Career Advisor ───────────────────────────────────────
@@ -94,21 +104,46 @@ class Settings:
         "arduino", "stm32", "iot", "industry 4.0", "hydraulics", "pneumatics",
     ]
 
+    # ── Deployment Mode ───────────────────────────────────────────────────────
+    # Set to "production" when deploying with ngrok
+    DEPLOYMENT_MODE = os.getenv( "DEPLOYMENT_MODE", "development" )
+
+    # Your ngrok URL (update this when ngrok restarts)
+    NGROK_URL = os.getenv( "NGROK_URL", "" )
+
     @classmethod
-    def validate(cls):
+    def validate ( cls ) :
         """Validate required settings"""
         errors = []
-        if not cls.SERPAPI_KEY:
-            errors.append("SERPAPI_KEY not set in .env — get a free key at https://serpapi.com")
-        if not cls.GROQ_API_KEY and not cls.ANTHROPIC_API_KEY and not cls.GEMINI_API_KEY:
-            errors.append("No LLM API keys configured. Ollama will be used as primary (recommended).")
+        if not cls.SERPAPI_KEY :
+            errors.append( "SERPAPI_KEY not set in .env — get a free key at https://serpapi.com" )
+        if not cls.GROQ_API_KEY and not cls.ANTHROPIC_API_KEY and not cls.GEMINI_API_KEY :
+            errors.append( "No LLM API keys configured. Ollama will be used as primary (recommended)." )
         return errors
 
     @classmethod
-    def ensure_store_dirs(cls):
+    def ensure_store_dirs ( cls ) :
         """Create storage directories if they don't exist."""
-        for d in (cls.FEEDBACK_STORE_DIR, cls.LTR_STORE_DIR):
-            Path(d).mkdir(parents=True, exist_ok=True)
+        for d in (cls.FEEDBACK_STORE_DIR, cls.LTR_STORE_DIR) :
+            Path( d ).mkdir( parents=True, exist_ok=True )
+
+    @classmethod
+    def get_cors_origins ( cls ) :
+        """Get CORS origins based on deployment mode."""
+        if cls.CORS_ALLOW_ALL :
+            return ["*"]
+
+        origins = []
+        for origin in cls.CORS_ORIGINS :
+            origin = origin.strip()
+            if origin :
+                origins.append( origin )
+
+        # Add ngrok URL if provided
+        if cls.NGROK_URL :
+            origins.append( cls.NGROK_URL )
+
+        return origins
 
 
 settings = Settings()

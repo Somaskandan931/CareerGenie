@@ -84,7 +84,13 @@ app = FastAPI(
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:8000",
+        "https://*.netlify.app",  # Allow all Netlify frontends
+        "https://*.ngrok-free.app",  # Allow all ngrok URLs
+        "*"  # Temporarily allow all for testing
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

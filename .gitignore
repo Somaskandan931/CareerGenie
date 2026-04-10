@@ -104,3 +104,6 @@ docker-compose.override.yml
 *.zip
 *.tar.gz
 *.bak
+
+# Local Netlify folder
+.netlify
