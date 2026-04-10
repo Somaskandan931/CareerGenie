@@ -303,13 +303,8 @@ class MentorService :
                 return mentor
         return None
 
-    def book_session ( self,
-                       user_id: str,
-                       mentor_id: str,
-                       session_date: str,
-                       session_time: str,
-                       duration_hours: int = 1,
-                       topic: str = "",
+    def book_session ( self, user_id: str, mentor_id: str, session_date: str,
+                       session_time: str, duration_hours: int = 1, topic: str = "",
                        notes: str = "" ) -> Dict :
         """
         Book a mentoring session
@@ -334,8 +329,8 @@ class MentorService :
             "currency" : mentor['currency'],
             "topic" : topic,
             "notes" : notes,
-            "status" : "pending",  # pending, confirmed, completed, cancelled
-            "created_at" : datetime.utcnow().isoformat(),
+            "status" : "pending",
+            "created_at" : datetime.utcnow().isoformat(),  # Store as string, not datetime object
             "payment_status" : "pending"
         }
 
@@ -345,7 +340,16 @@ class MentorService :
 
     def get_user_sessions ( self, user_id: str ) -> List[Dict] :
         """Get all sessions for a user"""
-        return [s for s in self.sessions if s['user_id'] == user_id]
+        sessions = [s for s in self.sessions if s['user_id'] == user_id]
+        # Ensure all datetime fields are strings
+        for s in sessions :
+            if "created_at" in s and hasattr( s["created_at"], "isoformat" ) :
+                s["created_at"] = s["created_at"].isoformat()
+            if "completed_at" in s and hasattr( s["completed_at"], "isoformat" ) :
+                s["completed_at"] = s["completed_at"].isoformat()
+            if "cancelled_at" in s and hasattr( s["cancelled_at"], "isoformat" ) :
+                s["cancelled_at"] = s["cancelled_at"].isoformat()
+        return sessions
 
     def cancel_session ( self, session_id: str, user_id: str ) -> Dict :
         """Cancel a session"""

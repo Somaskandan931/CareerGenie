@@ -36,6 +36,9 @@ const TrashIcon = () => (
 // ─── Message bubble ───────────────────────────────────────────────────────────
 const Bubble = ({ message }) => {
   const isUser = message.role === "user";
+  // Normalise content: backend may return reply/response/content — fall back to empty string
+  const content = message.content ?? message.reply ?? message.response ?? "";
+  const lines = content.split('\n');
   return (
     <div className={`flex items-start gap-3 ${isUser ? "flex-row-reverse" : ""}`}>
       <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${
@@ -48,8 +51,8 @@ const Bubble = ({ message }) => {
           ? "bg-indigo-600 text-white rounded-tr-sm"
           : "bg-white border border-gray-200 text-gray-800 rounded-tl-sm shadow-sm"
       }`}>
-        {message.content.split('\n').map((line, i) => (
-          <span key={i}>{line}{i < message.content.split('\n').length - 1 && <br />}</span>
+        {lines.map((line, i) => (
+          <span key={i}>{line}{i < lines.length - 1 && <br />}</span>
         ))}
       </div>
     </div>
@@ -113,7 +116,8 @@ const JobCoachChat = ({ resumeText = "" }) => {
       });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`);
       const data = await res.json();
-      setMessages(prev => [...prev, { role: "assistant", content: data.reply }]);
+      const reply = data.reply ?? data.response ?? data.content ?? "";
+      setMessages(prev => [...prev, { role: "assistant", content: reply }]);
     } catch (e) {
       setError(e.message);
     } finally {

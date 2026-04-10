@@ -1,1769 +1,1842 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
-from pydantic import BaseModel
-from typing import List, Optional, Dict, Any, Tuple
-import tempfile
-import os
+"""
+Career Genie AI - Main FastAPI Application
+===========================================
+A comprehensive career development platform with:
+- Resume parsing and ATS scoring
+- Job matching and market insights
+- AI-powered interview coaching
+- Personalized career roadmaps
+- Multi-agent debate system for career advice
+- Real-time WebRTC mentor sessions
+"""
+
+from __future__ import annotations
+
+import json
 import logging
+import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
-from datetime import datetime
+from typing import Dict, List, Optional
 
-from backend.config import settings
+from fastapi import FastAPI, File, UploadFile, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
-# Add these imports at the top if not already present
-import hashlib
-import threading
-import asyncio
-from functools import wraps
-from collections import defaultdict
-
-# ── Request deduplication for job matching ────────────────────────────────────
-_pending_job_matches: Dict[str, asyncio.Future] = {}
-_pending_lock = threading.Lock()
-
-
-def deduplicate_job_matches ( func ) :
-    """Decorator to prevent duplicate concurrent job match requests."""
-
-    @wraps( func )
-    async def wrapper ( request, *args, **kwargs ) :
-        # Create a unique key for this request
-        key_data = f"{request.resume_text[:500]}|{request.job_query}|{request.location}|{request.user_id}"
-        key = hashlib.md5( key_data.encode() ).hexdigest()
-
-        with _pending_lock :
-            if key in _pending_job_matches :
-                logger.info( f"Deduplicating job match request: {key[:8]}" )
-                return await _pending_job_matches[key]
-
-            # Create a future for this request
-            future = asyncio.Future()
-            _pending_job_matches[key] = future
-
-        try :
-            result = await func( request, *args, **kwargs )
-            future.set_result( result )
-            return result
-        except Exception as e :
-            future.set_exception( e )
-            raise
-        finally :
-            with _pending_lock :
-                _pending_job_matches.pop( key, None )
-
-    return wrapper
-
-# ── Gemini client (google-genai SDK) ─────────────────────────────────────────
-try:
-    from google import genai
-    _genai_client = genai.Client(api_key=settings.GEMINI_API_KEY) if settings.GEMINI_API_KEY else None
-except Exception as _genai_err:
-    _genai_client = None
-    genai = None
-    logging.warning(f"google-genai not available: {_genai_err}. Run: pip install google-genai")
-from backend.models import (
-    ResumeUploadResponse, JobMatchRequest, JobMatchResponse,
-    ConfigResponse, JobMatch,
-    # Feedback & LTR
-    FeedbackRecordRequest, RankingPreferenceRequest,
-    # Agent orchestrator
-    AgentRunRequest, AgentIntentRequest,
-    # Debate
-    DebateRunRequest, DebateCritiqueRequest,
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
-from backend.services.resume_parser import resume_parser
-from backend.services.vector_store import vector_store
-from backend.services.matcher import get_job_matcher
-from backend.services.career_advisor import career_advisor
-from backend.services.job_scraper import get_job_scraper
-from backend.services.roadmap_generator import get_roadmap_generator
-from backend.services.project_generator import get_project_generator
-from backend.services.tn_automotive_taxonomy import tn_extractor, NSQF_LEVELS, TN_SKILL_DB
-from backend.services.job_coach import get_job_coach
-from backend.services.market_insights import get_market_insights
-from backend.services.interview_coach import get_interview_coach
-from backend.services.progress_store import progress_store
-from backend.services.progress_tracker import get_progress_tracker
-from backend.services.ats_scorer import ats_scorer
-from backend.services.resume_rewriter import resume_rewriter
-from backend.models import (
-    DSAProblem, DSAProgressUpdate, DSABulkUpdate,
-    RoadmapCheckpointUpdate,
-    ProjectStatus, ProjectStatusUpdate,
-    InterviewEntryCreate, InterviewRoundAdd, InterviewOutcomeUpdate,
-    InterviewRound,
-)
-from backend.services.mentor_service import get_mentor_service
-from backend.models import MentorSearchRequest, BookSessionRequest, SessionFeedbackRequest
+logger = logging.getLogger(__name__)
 
-# New services
-from backend.services.feedback_engine import get_feedback_engine
-from backend.services.learning_to_rank import get_ltr_engine
-from backend.services.agent_orchestrator import get_orchestrator
-from backend.services.agent_debate import get_debate_orchestrator
-from backend.services.uncertainty_handler import get_uncertainty_handler
-
-logging.basicConfig( level=logging.INFO,
-                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s' )
-logger = logging.getLogger( __name__ )
-
-# ── Silence the broken ChromaDB/PostHog telemetry (capture() signature mismatch)
-try :
-    import chromadb.telemetry.product.posthog as _chroma_ph
-
-    _chroma_ph.Posthog = type( "_NoOp", (), {
-        "capture" : staticmethod( lambda *a, **kw : None ),
-        "shutdown" : staticmethod( lambda *a, **kw : None ),
-    } )()
-except Exception :
-    pass
-
-import hashlib
-
-# ── In-memory career advice cache — avoids hitting API on every request for
-#    the same resume+query pair
-_advice_cache: dict = {}
-
-
-# ============================================================================
-# LIFESPAN  — must be defined BEFORE app = FastAPI(lifespan=lifespan)
-# ============================================================================
+# ─────────────────────────────────────────────────────────────────────────────
+# LIFESPAN MANAGER
+# ─────────────────────────────────────────────────────────────────────────────
 
 @asynccontextmanager
-async def lifespan ( app: FastAPI ) :
-    # ── Startup ──────────────────────────────────────────────────────────────
-    logger.info( "=" * 60 )
-    logger.info( "Career Genie – TN AUTO SkillBridge v4.1" )
-    logger.info( "=" * 60 )
+async def lifespan(app: FastAPI):
+    """Startup and shutdown events."""
+    logger.info("🚀 Career Genie AI API starting up...")
 
-    settings.ensure_store_dirs()
-    Path( settings.CHROMA_PERSIST_DIR ).mkdir( parents=True, exist_ok=True )
+    # Initialize services
+    try:
+        from backend.services.vector_store import vector_store
+        stats = vector_store.get_stats()
+        logger.info(f"📚 Vector store ready: {stats['total_jobs']} jobs indexed")
+    except Exception as e:
+        logger.warning(f"⚠️ Vector store initialization warning: {e}")
 
-    for err in settings.validate() :
-        logger.error( f"  ❌ {err}" )
-    if not settings.validate() :
-        logger.info( "✅ All configurations valid" )
+    try:
+        from backend.services.ollama_service import get_ollama_service
+        ollama = get_ollama_service()
+        if ollama.available:
+            logger.info(f"🤖 Ollama service ready (LLM: {ollama.llm_model})")
+        else:
+            logger.warning("⚠️ Ollama service not available - run 'ollama serve'")
+    except Exception as e:
+        logger.warning(f"⚠️ Ollama service warning: {e}")
 
-    if _genai_client is None :
-        logger.error( "❌ Gemini client NOT initialized — check GEMINI_API_KEY and 'pip install google-genai'" )
-    else :
-        logger.info( "✅ Gemini client initialized" )
+    try:
+        from backend.services.job_scraper import get_job_scraper
+        logger.info("🔍 Job scraper service ready")
+    except Exception as e:
+        logger.warning(f"⚠️ Job scraper warning: {e}")
 
-    logger.info( f"✅ TN taxonomy: {len( tn_extractor.skill_db )} skills · {len( tn_extractor.job_roles )} roles" )
+    logger.info("✅ Career Genie AI API ready!")
 
-    stats = vector_store.get_stats()
-    logger.info(
-        f"✅ Vector store: {stats['total_jobs']} jobs indexed · freshness: {stats.get( 'freshness', 'unknown' )}" )
+    yield
 
-    logger.info( "✅ Engines ready: Feedback · LTR · Agent Orchestrator · Agent Debate · Uncertainty Handler" )
-    logger.info( "=" * 60 )
+    logger.info("👋 Career Genie AI API shutting down...")
 
-    yield  # ← app runs here
 
-    # ── Shutdown ──────────────────────────────────────────────────────────────
-    logger.info( "Career Genie shutting down." )
-
+# ─────────────────────────────────────────────────────────────────────────────
+# FASTAPI APP
+# ─────────────────────────────────────────────────────────────────────────────
 
 app = FastAPI(
-    title="Career Genie – TN AUTO SkillBridge",
-    description=(
-        "AI-powered workforce analytics · Job Coach · Market Insights · "
-        "Interview Coach · Resume Rewriter · Agent Debate · Learning-to-Rank"
-    ),
-    version="4.1.0",
+    title="Career Genie AI API",
+    description="AI-powered career development platform",
+    version="3.0.0",
     lifespan=lifespan,
 )
 
+# CORS middleware
 app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_credentials=True,
-    allow_methods=["*"], allow_headers=["*"],
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
+# ─────────────────────────────────────────────────────────────────────────────
+# ROUTER IMPORTS
+# ─────────────────────────────────────────────────────────────────────────────
 
-# ============================================================================
-# REQUEST MODELS
-# ============================================================================
-
-class RoadmapRequest( BaseModel ) :
-    resume_text: str
-    target_role: str
-    skill_gaps: List[str] = []
-    duration_weeks: int = 12
-    experience_level: Optional[str] = None
+from backend.routes.interview_live import router as interview_live_router
+app.include_router(interview_live_router)
 
 
-class ProjectRequest( BaseModel ) :
-    resume_text: str
-    target_role: str
-    skill_gaps: List[str] = []
-    difficulty: Optional[str] = "intermediate"
-    num_projects: int = 5
+# ─────────────────────────────────────────────────────────────────────────────
+# REQUEST/RESPONSE MODELS
+# ─────────────────────────────────────────────────────────────────────────────
 
-
-class TNSkillAnalysisRequest( BaseModel ) :
-    profile_text: str
-    target_role: Optional[str] = None
-
-
-class BatchProfileItem( BaseModel ) :
-    id: str
-    name: str
-    text: str
-    target_role: Optional[str] = None
-
-
-class BatchAnalysisRequest( BaseModel ) :
-    institution_name: Optional[str] = "Tamil Nadu ITI / Polytechnic"
-    profiles: List[BatchProfileItem]
-
-
-class ChatMessage( BaseModel ) :
-    role: str
-    content: str
-
-
-class JobCoachRequest( BaseModel ) :
-    messages: List[ChatMessage]
+class ChatRequest(BaseModel):
+    messages: List[Dict[str, str]]
     resume_text: Optional[str] = None
+    session_id: Optional[str] = None
 
 
-class MarketInsightsRequest( BaseModel ) :
-    role: str
-    skills: Optional[List[str]] = None
+class MatchRequest(BaseModel):
+    resume_text: str
+    job_query: Optional[str] = None
+    top_k: int = 10
+    num_jobs: int = 50
     location: str = "India"
+    user_id: Optional[str] = None
+    min_match_score: float = 40.0
+    experience_level: Optional[str] = None
+    posted_within_days: Optional[int] = 14
+    exclude_remote: bool = False
+    force_refresh: bool = False
 
 
-class InterviewChatRequest( BaseModel ) :
-    messages: List[ChatMessage]
-    role: str
-    interview_type: str = "mixed"
-    resume_text: Optional[str] = None
+class RoadmapRequest(BaseModel):
+    resume_text: str
+    target_role: str
+    skill_gaps: Optional[List[str]] = None
+    duration_weeks: int = 12
 
 
-class InterviewQuestionsRequest( BaseModel ) :
+class ATSRequest(BaseModel):
+    resume_text: str
+    target_role: str = "Software Engineer"
+    job_description: Optional[str] = None
+
+
+class InterviewRequest(BaseModel):
     role: str
     interview_type: str = "mixed"
     resume_text: Optional[str] = None
     num_questions: int = 10
 
 
-class EvaluateAnswerRequest( BaseModel ) :
+class InterviewAnswerRequest(BaseModel):
     question: str
     answer: str
     role: str
     interview_type: str = "mixed"
 
 
-class ResumeRewriteRequest( BaseModel ) :
-    resume_text: str
-    target_role: str = "Software Engineer"
-    tone: str = "professional"
+class ProgressUpdateRequest(BaseModel):
+    task_id: str
+    done: bool
+    week_key: str
 
 
-class RoadmapImportRequest( BaseModel ) :
+class FeedbackRequest(BaseModel):
+    signal_type: str
+    item_id: str
+    metadata: Optional[Dict] = None
+
+
+class DebateRequest(BaseModel):
+    topic: str
+    context: Dict
+    max_rounds: int = 2
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HEALTH AND CONFIG ENDPOINTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/")
+async def root():
+    return {
+        "name": "Career Genie AI API",
+        "version": "3.0.0",
+        "status": "operational",
+        "endpoints": {
+            "resume": "/upload-resume/parse",
+            "ats": "/ats/score",
+            "match": "/rag/match-realtime",
+            "roadmap": "/roadmap/generate",
+            "interview": "/interview/generate-questions",
+            "coach": "/job-coach/chat",
+            "debate": "/debate/run",
+            "progress": "/progress/*",
+        }
+    }
+
+
+@app.get("/config")
+async def get_config():
+    """Return frontend configuration."""
+    return {
+        "ollama_available": _check_ollama(),
+        "features": {
+            "debate": True,
+            "live_interview": True,
+            "mentor_matching": True,
+            "progress_tracking": True,
+        }
+    }
+
+
+def _check_ollama() -> bool:
+    try:
+        from backend.services.ollama_service import get_ollama_service
+        return get_ollama_service().available
+    except Exception:
+        return False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RESUME ENDPOINTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.post("/upload-resume/parse")
+async def parse_resume(file: UploadFile = File(...)):
+    """Parse uploaded resume file (PDF or DOCX)."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file provided")
+
+    # Save temporarily
+    temp_path = Path(f"/tmp/{uuid.uuid4()}{Path(file.filename).suffix}")
+    try:
+        content = await file.read()
+        temp_path.write_bytes(content)
+
+        from backend.services.resume_parser import resume_parser
+        result = resume_parser.parse(str(temp_path))
+
+        # Add uncertainty validation
+        from backend.services.uncertainty_handler import get_uncertainty_handler
+        uh = get_uncertainty_handler()
+        _, report = uh.wrap_parse(result["resume_text"], result["word_count"])
+
+        return {
+            "success": True,
+            "resume_text": result["resume_text"],
+            "word_count": result["word_count"],
+            "confidence": report.to_dict(),
+        }
+    except Exception as e:
+        logger.error(f"Resume parse error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if temp_path.exists():
+            temp_path.unlink()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ATS SCORING ENDPOINTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.post("/ats/score")
+async def ats_score(request: ATSRequest):
+    """Score resume against target role or job description."""
+    try:
+        from backend.services.ats_scorer import ats_scorer
+        result = ats_scorer.score_resume(
+            request.resume_text,
+            request.target_role,
+            request.job_description
+        )
+
+        # Add uncertainty validation
+        from backend.services.uncertainty_handler import get_uncertainty_handler
+        uh = get_uncertainty_handler()
+        _, report = uh.wrap_ats(result)
+
+        return {
+            "result": result,              # frontend reads data.result
+            "_confidence": report.to_dict() if hasattr(report, "to_dict") else {},
+        }
+    except Exception as e:
+        logger.error(f"ATS score error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# JOB MATCHING ENDPOINTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.post("/rag/match-realtime")
+async def match_realtime(request: MatchRequest):
+    """Match resume to jobs in real-time."""
+    try:
+        from backend.services.matcher import get_job_matcher
+        matcher = get_job_matcher()
+
+        # Ensure job index is populated — use job_query if provided, else infer from resume
+        from backend.services.vector_store import vector_store
+        stats_before = vector_store.get_stats()
+        if stats_before["total_jobs"] < 10 or request.force_refresh:
+            await _refresh_jobs(
+                request.resume_text,
+                request.location,
+                job_query=request.job_query,
+                num_jobs=request.num_jobs,
+            )
+
+        stats_after = vector_store.get_stats()
+
+        matches = matcher.match_resume_to_jobs(
+            request.resume_text,
+            top_k=request.top_k,
+            location=request.location,
+            user_id=request.user_id,
+            force_refresh=request.force_refresh,
+        )
+
+        # Filter by min_match_score
+        matches = [m for m in matches if m.get("match_score", 0) >= request.min_match_score]
+
+        # Add uncertainty validation
+        from backend.services.uncertainty_handler import get_uncertainty_handler
+        uh = get_uncertainty_handler()
+        validated_matches, report = uh.wrap_matches(matches)
+
+        # Attach _confidence to each job so JobCard can display it
+        for job in validated_matches:
+            if "_confidence" not in job:
+                job["_confidence"] = None
+
+        # Get career advice with context
+        from backend.services.career_advisor import career_advisor
+        advice = career_advisor.generate_career_advice(
+            resume_text=request.resume_text,
+            target_role=matcher._extract_target_role(request.resume_text),
+            job_matches=validated_matches,
+        )
+
+        # Build skill_comparison for SkillAssessmentDashboard
+        from backend.services.enhanced_skill_extractor import EnhancedSkillExtractor
+        extractor = EnhancedSkillExtractor()
+        resume_skills = extractor.extract_skills_with_context(request.resume_text)
+        skill_comparison = {
+            "resume_skills": resume_skills,
+            "job_skills": [],
+        }
+
+        # Return shape expected by the frontend JobMatches component
+        return {
+            "matched_jobs": validated_matches,           # frontend reads data.matched_jobs
+            "total_jobs_fetched": stats_after.get("total_jobs", len(validated_matches)),
+            "total_jobs_indexed": stats_after.get("total_jobs", len(validated_matches)),
+            "search_query": request.job_query or "",
+            "career_advice": advice,
+            "skill_comparison": skill_comparison,
+            "_confidence": report.to_dict() if hasattr(report, "to_dict") else {},
+        }
+    except Exception as e:
+        logger.error(f"Match error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _refresh_jobs(resume_text: str, location: str, job_query: str = None, num_jobs: int = 50):
+    """Refresh job index in background."""
+    try:
+        from backend.services.job_scraper import get_job_scraper
+        from backend.services.vector_store import vector_store
+        from backend.services.matcher import get_job_matcher
+
+        matcher = get_job_matcher()
+        # Use the explicit query if provided, otherwise infer from resume
+        target_role = job_query.strip() if job_query else matcher._extract_target_role(resume_text)
+
+        scraper = get_job_scraper()
+        jobs = scraper.fetch_jobs(query=target_role, location=location, num_jobs=num_jobs)
+
+        if jobs:
+            vector_store.index_jobs(jobs)
+            logger.info(f"Refreshed {len(jobs)} jobs for query='{target_role}'")
+    except Exception as e:
+        logger.error(f"Job refresh failed: {e}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ROADMAP ENDPOINTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.post("/roadmap/generate")
+async def generate_roadmap(request: RoadmapRequest):
+    """Generate personalized learning roadmap."""
+    try:
+        from backend.services.roadmap_generator import get_roadmap_generator
+        from backend.services.enhanced_skill_extractor import EnhancedSkillExtractor
+
+        # Extract skills if gaps not provided
+        skill_gaps = request.skill_gaps
+        if not skill_gaps:
+            extractor = EnhancedSkillExtractor()
+            skills = extractor.extract_skills_with_context(request.resume_text)
+            # Simulate gaps based on target role
+            skill_gaps = [s["skill"] for s in skills[:5]] if skills else ["Python", "SQL", "System Design"]
+
+        generator = get_roadmap_generator()
+        roadmap = generator.generate_roadmap(
+            request.resume_text,
+            request.target_role,
+            skill_gaps,
+            request.duration_weeks,
+        )
+
+        # Add uncertainty validation
+        from backend.services.uncertainty_handler import get_uncertainty_handler
+        uh = get_uncertainty_handler()
+        _, report = uh.wrap_roadmap(roadmap)
+
+        return {
+            "roadmap": roadmap,
+            "_confidence": report.to_dict(),
+        }
+    except Exception as e:
+        logger.error(f"Roadmap generation error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# INTERVIEW COACH ENDPOINTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.post("/interview/generate-questions")
+async def interview_questions(request: InterviewRequest):
+    """Generate interview questions for a role."""
+    try:
+        from backend.services.interview_coach import get_interview_coach
+        coach = get_interview_coach()
+
+        questions = coach.generate_questions(
+            role=request.role,
+            interview_type=request.interview_type,
+            resume_text=request.resume_text,
+            num_questions=request.num_questions,
+        )
+
+        return {"questions": questions}
+    except Exception as e:
+        logger.error(f"Question generation error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/interview/evaluate-answer")
+async def evaluate_answer(request: InterviewAnswerRequest):
+    """Evaluate an interview answer."""
+    try:
+        from backend.services.interview_coach import get_interview_coach
+        coach = get_interview_coach()
+
+        result = coach.evaluate_answer(
+            question=request.question,
+            answer=request.answer,
+            role=request.role,
+            interview_type=request.interview_type,
+        )
+
+        return result
+    except Exception as e:
+        logger.error(f"Answer evaluation error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# JOB COACH (CHAT) ENDPOINTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.post("/coach/chat")       # alias used by the frontend
+@app.post("/job-coach/chat")  # original route kept for backwards compatibility
+async def job_coach_chat(request: ChatRequest):
+    """Chat with the AI career coach."""
+    try:
+        from backend.services.job_coach import get_job_coach
+        coach = get_job_coach()
+
+        response = coach.chat(
+            messages=request.messages,
+            resume_text=request.resume_text,
+        )
+
+        # Store session if session_id provided
+        if request.session_id:
+            from backend.services.state_manager import state
+            state.update(request.session_id, {
+                "query": request.messages[-1]["content"] if request.messages else "",
+                "final": response,
+                "confidence": 0.8,
+            })
+
+        return {
+            "reply": response,       # frontend reads data.reply
+            "response": response,    # keep for backwards compatibility
+        }
+    except Exception as e:
+        logger.error(f"Job coach error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DEBATE SYSTEM ENDPOINTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.post("/debate/run")
+async def debate_run(request: DebateRequest):
+    """Run multi-agent debate for career recommendations."""
+    try:
+        from backend.services.agent_debate import get_debate_orchestrator
+        debate = get_debate_orchestrator()
+
+        result = debate.run_debate(
+            topic=request.topic,
+            context=request.context,
+            max_rounds=request.max_rounds,
+        )
+
+        return debate.to_dict(result)
+    except Exception as e:
+        logger.error(f"Debate error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/debate/quick-critique")
+async def quick_critique(plan: Dict, context: Dict):
+    """Quick single-round critique of a plan."""
+    try:
+        from backend.services.agent_debate import get_debate_orchestrator
+        debate = get_debate_orchestrator()
+
+        result = debate.quick_critique(plan, context)
+        return result
+    except Exception as e:
+        logger.error(f"Critique error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PROGRESS TRACKING ENDPOINTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ImportRoadmapBody(BaseModel):
     user_id: str
-    roadmap: Dict[str, Any]
+    roadmap: Dict
 
+class ImportProjectsBody(BaseModel):
+    user_id: str
+    projects: List[Dict]
 
-class TaskUpdateRequest( BaseModel ) :
+class TaskUpdateBody(BaseModel):
     user_id: str
     week_key: str
     task_id: str
     done: bool
 
-
-class ProjectAddRequest( BaseModel ) :
-    user_id: str
-    project: Dict[str, Any]
-
-
-class ProjectUpdateRequest( BaseModel ) :
+class ProjectUpdateBody(BaseModel):
     user_id: str
     project_id: str
-    updates: Dict[str, Any]
+    updates: Optional[Dict] = None
+    status: Optional[str] = None
+    github_url: Optional[str] = None
+    live_url: Optional[str] = None
+    progress_pct: Optional[int] = None
+    notes: Optional[str] = None
 
-
-class DSALogRequest( BaseModel ) :
-    user_id: str
-    topic: str
-    problem_name: str
-    difficulty: str = "medium"
-    solved: bool = True
-
-
-class DSABulkUpdateRequest( BaseModel ) :
+class DSABulkUpdateBody(BaseModel):
     user_id: str
     topic: str
     solved_count: int
 
-
-class InterviewAddRequest( BaseModel ) :
+class InterviewAddBody(BaseModel):
     user_id: str
     company: str
     role: str
     source: str = "LinkedIn"
 
-
-class InterviewStageUpdateRequest( BaseModel ) :
+class InterviewStageBody(BaseModel):
     user_id: str
     interview_id: str
     new_stage: str
     notes: str = ""
 
 
-class ATSScoreRequest( BaseModel ) :
-    resume_text: str
-    target_role: Optional[str] = None
-    job_description: Optional[str] = None  # if provided, score against actual JD
+# ── GET summary / full / analytics ──────────────────────────────────────────
+
+@app.get("/progress/{user_id}/summary")
+@app.get("/progress/{user_id}")
+async def get_progress_summary(user_id: str):
+    """Get user progress summary."""
+    try:
+        from backend.services.progress_tracker import get_progress_tracker
+        tracker = get_progress_tracker()
+        return tracker.get_summary(user_id)
+    except Exception as e:
+        logger.error(f"Progress summary error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-class HRRecruiterRequest( BaseModel ) :
-    resume_text: str
-    target_role: str
-    company_type: str = "startup"  # "startup" | "mid-size" | "enterprise" | "faang"
-    focus_area: str = "general"  # "general" | "technical" | "behavioural" | "compensation"
-    job_description: Optional[str] = None  # if provided, recruiter evaluates against actual JD
+@app.get("/progress/{user_id}/full")
+async def get_progress_full(user_id: str):
+    """Get full user progress state (roadmap weeks, projects, DSA, interviews)."""
+    try:
+        from backend.services.progress_tracker import get_progress_tracker
+        tracker = get_progress_tracker()
+        # Return full state; fall back to summary if tracker doesn't have get_full
+        if hasattr(tracker, "get_full"):
+            return tracker.get_full(user_id)
+        return tracker.get_summary(user_id)
+    except Exception as e:
+        logger.error(f"Progress full error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-class ResumeAnalyzeRequest( BaseModel ) :
-    """Combined request — runs ATS scorer + HR recruiter panel in parallel."""
-    resume_text: str
-    target_role: str
-    job_description: Optional[str] = None
-    company_type: str = "startup"
-    focus_area: str = "general"
+@app.get("/progress/{user_id}/interviews/analytics")
+async def get_interview_analytics(user_id: str):
+    """Get interview pipeline analytics."""
+    try:
+        from backend.services.progress_tracker import get_progress_tracker
+        tracker = get_progress_tracker()
+        if hasattr(tracker, "get_interview_analytics"):
+            return tracker.get_interview_analytics(user_id)
+        summary = tracker.get_summary(user_id)
+        return {"interviews": summary.get("interviews", [])}
+    except Exception as e:
+        logger.error(f"Interview analytics error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-# ============================================================================
-# CONFIG
-# ============================================================================
+# ── Roadmap ──────────────────────────────────────────────────────────────────
 
-@app.get( "/config", response_model=ConfigResponse )
-def get_config () :
-    return ConfigResponse(
-        serpapi_key_present=bool( settings.SERPAPI_KEY ),
-        searchapi_key_present=bool( settings.SERPAPI_KEY ),
-        groq_key_present=bool( settings.GROQ_API_KEY ),
-        anthropic_key_present=bool( settings.ANTHROPIC_API_KEY ),
-        gemini_key_present=bool( settings.GEMINI_API_KEY ),
-        vector_db_initialized=True,
-        total_indexed_jobs=vector_store.collection.count()
-    )
+@app.post("/progress/roadmap/import")
+async def import_roadmap(body: ImportRoadmapBody):
+    """Import roadmap for user."""
+    try:
+        from backend.services.progress_tracker import get_progress_tracker
+        tracker = get_progress_tracker()
+        return tracker.import_roadmap(body.user_id, body.roadmap)
+    except Exception as e:
+        logger.error(f"Roadmap import error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-# ============================================================================
-# RESUME UPLOAD
-# ============================================================================
+@app.post("/progress/roadmap/task/update")   # frontend path
+@app.post("/progress/task/update")           # original path
+async def update_task(body: TaskUpdateBody):
+    """Update task completion status."""
+    try:
+        from backend.services.progress_tracker import get_progress_tracker
+        tracker = get_progress_tracker()
+        return tracker.update_task(body.user_id, body.week_key, body.task_id, body.done)
+    except Exception as e:
+        logger.error(f"Task update error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-@app.post( "/upload-resume/parse", response_model=ResumeUploadResponse )
-async def parse_resume ( file: UploadFile = File( ... ) ) :
-    logger.info( f"Resume upload: {file.filename}" )
-    if not file.filename.lower().endswith( ('.pdf', '.docx', '.doc') ) :
-        raise HTTPException( status_code=400, detail="Invalid format. Upload PDF or DOCX." )
-    suffix = Path( file.filename ).suffix
-    with tempfile.NamedTemporaryFile( delete=False, suffix=suffix ) as tmp :
-        tmp.write( await file.read() )
-        temp_path = tmp.name
-    try :
-        result = resume_parser.parse( temp_path )
 
-        # Confidence check on parsed text
-        try :
-            uh = get_uncertainty_handler()
-            _, parse_report = uh.wrap_parse( result['resume_text'], result['word_count'] )
-            if parse_report.should_retry :
-                logger.warning( f"Parse confidence low: {parse_report.issues}" )
-        except Exception :
-            pass
+# ── Projects ─────────────────────────────────────────────────────────────────
 
-        return ResumeUploadResponse(
-            status="success",
-            resume_text=result['resume_text'],
-            word_count=result['word_count']
+@app.post("/progress/projects/import")
+async def import_projects(body: ImportProjectsBody):
+    """Import project suggestions into user's tracker."""
+    try:
+        from backend.services.progress_tracker import get_progress_tracker
+        tracker = get_progress_tracker()
+        if hasattr(tracker, "import_projects"):
+            return tracker.import_projects(body.user_id, body.projects)
+        return {"status": "ok", "imported": len(body.projects)}
+    except Exception as e:
+        logger.error(f"Projects import error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/progress/projects/update")
+async def update_project(body: ProjectUpdateBody):
+    """Update a project entry."""
+    try:
+        from backend.services.progress_tracker import get_progress_tracker
+        tracker = get_progress_tracker()
+        updates = body.updates or {
+            k: v for k, v in {
+                "status": body.status,
+                "github_url": body.github_url,
+                "live_url": body.live_url,
+                "progress_pct": body.progress_pct,
+                "notes": body.notes,
+            }.items() if v is not None
+        }
+        if hasattr(tracker, "update_project"):
+            return tracker.update_project(body.user_id, body.project_id, updates)
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error(f"Project update error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── DSA ───────────────────────────────────────────────────────────────────────
+
+@app.post("/progress/dsa/bulk-update")   # frontend path
+@app.post("/progress/dsa/log")           # original path
+async def bulk_update_dsa(body: DSABulkUpdateBody):
+    """Bulk-update DSA solved count for a topic."""
+    try:
+        from backend.services.progress_tracker import get_progress_tracker
+        tracker = get_progress_tracker()
+        if hasattr(tracker, "bulk_update_dsa"):
+            return tracker.bulk_update_dsa(body.user_id, body.topic, body.solved_count)
+        # Fallback: log N problems
+        for i in range(body.solved_count):
+            tracker.log_dsa_problem(body.user_id, body.topic, f"problem_{i+1}", "medium", True)
+        return {"status": "ok", "logged": body.solved_count}
+    except Exception as e:
+        logger.error(f"DSA bulk update error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Interviews ────────────────────────────────────────────────────────────────
+
+@app.post("/progress/interviews/add")   # frontend path
+@app.post("/progress/interview/add")    # original path
+async def add_interview(body: InterviewAddBody):
+    """Add job application/interview entry."""
+    try:
+        from backend.services.progress_tracker import get_progress_tracker
+        tracker = get_progress_tracker()
+        return tracker.add_interview(body.user_id, body.company, body.role, body.source)
+    except Exception as e:
+        logger.error(f"Interview add error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.patch("/progress/interviews/stage")
+async def update_interview_stage(body: InterviewStageBody):
+    """Update interview pipeline stage."""
+    try:
+        from backend.services.progress_tracker import get_progress_tracker
+        tracker = get_progress_tracker()
+        if hasattr(tracker, "update_interview_stage"):
+            return tracker.update_interview_stage(body.user_id, body.interview_id, body.new_stage, body.notes)
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error(f"Interview stage update error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/progress/interviews/{user_id}/{interview_id}")
+async def delete_interview(user_id: str, interview_id: str):
+    """Delete an interview entry."""
+    try:
+        from backend.services.progress_tracker import get_progress_tracker
+        tracker = get_progress_tracker()
+        if hasattr(tracker, "delete_interview"):
+            return tracker.delete_interview(user_id, interview_id)
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error(f"Interview delete error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FEEDBACK ENGINE ENDPOINTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+class FeedbackBody(BaseModel):
+    user_id: str
+    signal_type: str
+    item_id: str
+    metadata: Optional[Dict] = None
+
+
+@app.post("/feedback/record")
+async def record_feedback(body: FeedbackBody):
+    """Record user feedback signal."""
+    try:
+        from backend.services.feedback_engine import get_feedback_engine
+        engine = get_feedback_engine()
+
+        weights = engine.record(
+            user_id=body.user_id,
+            signal_type=body.signal_type,
+            item_id=body.item_id,
+            metadata=body.metadata,
         )
-    except Exception as e :
-        raise HTTPException( status_code=500, detail=f"Failed to parse resume: {e}" )
-    finally :
-        if os.path.exists( temp_path ) :
-            os.remove( temp_path )
+
+        return {"weights": weights}
+    except Exception as e:
+        logger.error(f"Feedback record error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-# ============================================================================
-# JOB MATCHING  — now accepts user_id for adaptive scoring + LTR re-ranking
-# ============================================================================
+@app.get("/feedback/stats/{user_id}")
+async def feedback_stats(user_id: str):
+    """Get feedback statistics for user."""
+    try:
+        from backend.services.feedback_engine import get_feedback_engine
+        engine = get_feedback_engine()
 
-@app.post( "/rag/match-realtime", response_model=JobMatchResponse )
-@deduplicate_job_matches
-async def match_jobs_realtime ( request: JobMatchRequest ) :
-    if not request.resume_text.strip() :
-        raise HTTPException( status_code=400, detail="Resume text is required" )
-    if not request.job_query.strip() :
-        raise HTTPException( status_code=400, detail="Job query is required" )
+        stats = engine.get_stats(user_id)
+        return stats
+    except Exception as e:
+        logger.error(f"Feedback stats error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-    force_refresh = request.force_refresh
 
-    try :
-        loop = asyncio.get_event_loop()
+# ─────────────────────────────────────────────────────────────────────────────
+# AGENT ORCHESTRATOR ENDPOINTS
+# ─────────────────────────────────────────────────────────────────────────────
 
-        # Fetch jobs
-        jobs = await loop.run_in_executor(
-            None,
-            lambda : get_job_scraper().fetch_jobs(
-                query=request.job_query,
-                location=request.location,
-                num_jobs=request.num_jobs,
-                days_old=7
+@app.post("/orchestrator/run")
+async def orchestrator_run(goal: str, user_id: str = "", extra_context: Optional[Dict] = None):
+    """Run the agent orchestrator for a goal."""
+    try:
+        from backend.services.agent_orchestrator import get_orchestrator
+        orchestrator = get_orchestrator()
+
+        result = orchestrator.run_goal(
+            goal=goal,
+            user_id=user_id,
+            extra_context=extra_context,
+        )
+
+        return result
+    except Exception as e:
+        logger.error(f"Orchestrator error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/orchestrator/plan")
+async def orchestrator_plan(user_intent: str, user_id: str = ""):
+    """Plan tasks from user intent."""
+    try:
+        from backend.services.agent_orchestrator import get_orchestrator
+        orchestrator = get_orchestrator()
+
+        result = orchestrator.plan_from_intent(user_intent, user_id)
+        return result
+    except Exception as e:
+        logger.error(f"Planning error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MARKET INSIGHTS ENDPOINTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+class MarketInsightsRequest(BaseModel):
+    role: str
+    skills: Optional[List[str]] = None
+    location: str = "India"
+
+
+@app.post("/insights/market")   # frontend uses POST with JSON body
+@app.get("/insights/market")    # keep GET for backwards compatibility
+@app.post("/market/insights")
+@app.get("/market/insights")
+async def market_insights(request: Optional[MarketInsightsRequest] = None,
+                          role: Optional[str] = None,
+                          skills: Optional[str] = None,
+                          location: str = "India"):
+    """Get market insights for a role."""
+    try:
+        from backend.services.market_insights import get_market_insights
+        insights = get_market_insights()
+
+        # Support both JSON body (POST) and query params (GET)
+        if request is not None:
+            _role = request.role
+            _skills = request.skills
+            _location = request.location
+        else:
+            _role = role or "Software Engineer"
+            _skills = skills.split(",") if skills else None
+            _location = location
+
+        result = insights.get_insights(_role, _skills, _location)
+        return result
+    except Exception as e:
+        logger.error(f"Market insights error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SKILL EXTRACTION ENDPOINTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.post("/skills/extract")
+async def extract_skills(text: str, enhanced: bool = True):
+    """Extract skills from text."""
+    try:
+        if enhanced:
+            from backend.services.enhanced_skill_extractor import EnhancedSkillExtractor
+            extractor = EnhancedSkillExtractor()
+            skills = extractor.extract_skills_with_context(text)
+        else:
+            from backend.services.skill_tool import extract_skills_fast
+            skills = extract_skills_fast(text)
+
+        return {"skills": skills}
+    except Exception as e:
+        logger.error(f"Skill extraction error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/skills/gap")
+async def skills_gap(resume_text: str, job_description: str):
+    """Compute skill gap between resume and job description."""
+    try:
+        from backend.services.skill_tool import skills_gap
+        result = skills_gap(resume_text, job_description)
+        return result
+    except Exception as e:
+        logger.error(f"Skills gap error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RESUME REWRITER ENDPOINTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ResumeRewriteRequest(BaseModel):
+    resume_text: str
+    target_role: str = "Software Engineer"
+    tone: str = "professional"
+
+
+@app.post("/resume/rewrite")
+async def rewrite_resume(request: ResumeRewriteRequest):
+    """Rewrite resume for ATS optimization."""
+    try:
+        from backend.services.resume_rewriter import resume_rewriter
+        result = resume_rewriter.rewrite(request.resume_text, request.target_role, request.tone)
+        return {"result": result}      # frontend reads data.result
+    except Exception as e:
+        logger.error(f"Resume rewrite error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MENTOR SERVICE ENDPOINTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+class MentorSearchBody(BaseModel):
+    query: Optional[str] = None
+    domain: Optional[str] = None
+    user_skills: Optional[List[str]] = None
+    user_id: Optional[str] = None
+    expertise: Optional[List[str]] = None
+    industry: Optional[str] = None
+    language: Optional[str] = None
+    max_rate: Optional[float] = None
+    min_rating: float = 4.0
+    country: Optional[str] = None
+
+
+class MentorBookBody(BaseModel):
+    mentor_id: str
+    user_id: str
+    date: Optional[str] = None
+    time: Optional[str] = None
+    session_date: Optional[str] = None
+    session_time: Optional[str] = None
+    duration_hours: int = 1
+    topic: str = ""
+    message: str = ""
+    notes: str = ""
+    mentor_name: Optional[str] = None
+    mentor_domain: Optional[str] = None
+
+
+@app.post("/mentor/search")    # frontend uses POST with JSON body
+@app.get("/mentor/search")     # keep GET for backwards compatibility
+@app.post("/mentors/search")
+@app.get("/mentors/search")
+async def search_mentors(body: Optional[MentorSearchBody] = None):
+    """Search for mentors."""
+    try:
+        from backend.services.mentor_service import get_mentor_service
+        service = get_mentor_service()
+
+        if body is not None:
+            expertise_list = body.expertise or ([body.domain] if body.domain else None)
+            results = service.search_mentors(
+                expertise=expertise_list,
+                industry=body.industry,
+                language=body.language,
+                max_rate=body.max_rate,
+                min_rating=body.min_rating or 4.0,
+                country=body.country,
             )
+        else:
+            results = service.search_mentors()
+
+        # Ensure all results are serializable
+        serializable_results = []
+        for mentor in results:
+            serializable_mentor = {
+                "mentor_id": mentor.get("mentor_id", ""),
+                "name": mentor.get("name", ""),
+                "title": mentor.get("title", ""),
+                "company": mentor.get("company", ""),
+                "location": mentor.get("location", ""),
+                "country": mentor.get("country", ""),
+                "timezone": mentor.get("timezone", ""),
+                "languages": mentor.get("languages", []),
+                "expertise": mentor.get("expertise", []),
+                "industries": mentor.get("industries", []),
+                "experience_years": mentor.get("experience_years", 0),
+                "hourly_rate": mentor.get("hourly_rate", 0),
+                "currency": mentor.get("currency", "USD"),
+                "bio": mentor.get("bio", ""),
+                "available": mentor.get("available", True),
+                "rating": mentor.get("rating", 0),
+                "total_sessions": mentor.get("total_sessions", 0),
+                "languages_spoken": mentor.get("languages_spoken", [])
+            }
+            serializable_results.append(serializable_mentor)
+
+        return {"mentors": serializable_results}
+    except Exception as e:
+        logger.error(f"Mentor search error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/mentor/book")
+@app.post("/mentors/book")
+async def book_mentor(body: MentorBookBody):
+    """Book a mentoring session."""
+    try:
+        from backend.services.mentor_service import get_mentor_service
+        service = get_mentor_service()
+
+        # Validate required fields
+        if not body.mentor_id:
+            raise HTTPException(status_code=400, detail="mentor_id is required")
+        if not body.user_id:
+            raise HTTPException(status_code=400, detail="user_id is required")
+
+        # Get session date and time from either field
+        session_date = body.session_date or body.date
+        session_time = body.session_time or body.time
+
+        if not session_date:
+            raise HTTPException(status_code=400, detail="session_date is required")
+        if not session_time:
+            raise HTTPException(status_code=400, detail="session_time is required")
+
+        result = service.book_session(
+            user_id=body.user_id,
+            mentor_id=body.mentor_id,
+            session_date=session_date,
+            session_time=session_time,
+            duration_hours=body.duration_hours,
+            topic=body.topic or body.message,
+            notes=body.notes,
         )
+
+        # Ensure result is serializable
+        if "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+
+        # Convert datetime objects to strings for JSON serialization
+        if "created_at" in result and hasattr(result["created_at"], "isoformat"):
+            result["created_at"] = result["created_at"].isoformat()
+
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Booking error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/mentors/sessions/{user_id}")
+async def get_user_sessions(user_id: str):
+    """Get user's mentoring sessions."""
+    try:
+        from backend.services.mentor_service import get_mentor_service
+        service = get_mentor_service()
+
+        sessions = service.get_user_sessions(user_id)
+        return {"sessions": sessions}
+    except Exception as e:
+        logger.error(f"Sessions error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WEBSOCKET ENDPOINTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.websocket("/ws/room/{room_id}/{role}")
+async def websocket_room(websocket: WebSocket, room_id: str, role: str):
+    """WebSocket endpoint for mentor matching rooms."""
+    from backend.services.live_session import signaling
+
+    if role not in ("mentor", "candidate"):
+        await websocket.close(code=1008, reason="Invalid role")
+        return
+
+    await websocket.accept()
+    await signaling.join_room(room_id, role, websocket)
+
+    try:
+        while True:
+            data = await websocket.receive_text()
+            message = json.loads(data)
+
+            msg_type = message.get("type")
+
+            if msg_type in ("offer", "answer", "ice-candidate", "chat"):
+                await signaling.relay(room_id, role, {**message, "from": role})
+            elif msg_type == "leave":
+                break
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await signaling.leave(room_id, role)
+
+
+@app.websocket("/ws/interview/{session_id}")
+async def websocket_interview_session(websocket: WebSocket, session_id: str):
+    """WebSocket endpoint for interview sessions (backward compatibility)."""
+    from backend.services.live_session import signaling
+
+    await websocket.accept()
+    role = websocket.query_params.get("role", "candidate")
+
+    if role not in ("mentor", "candidate"):
+        await websocket.close(code=1008, reason="Invalid role")
+        return
+
+    await signaling.join_room(session_id, role, websocket)
+
+    try:
+        while True:
+            data = await websocket.receive_text()
+            message = json.loads(data)
+            msg_type = message.get("type")
+
+            if msg_type in ("offer", "answer", "ice-candidate", "chat"):
+                await signaling.relay(session_id, role, {**message, "from": role})
+            elif msg_type == "leave":
+                break
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await signaling.leave(session_id, role)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TN AUTOMOTIVE TAXONOMY ENDPOINTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/tn-automotive/roles")
+async def tn_automotive_roles():
+    """List available TN automotive job roles."""
+    try:
+        from backend.services.tn_automotive_taxonomy import tn_extractor
+        roles = tn_extractor.list_roles()
+        return {"roles": roles}
+    except Exception as e:
+        logger.error(f"Roles error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/tn-automotive/extract-skills")
+async def tn_automotive_extract_skills(text: str):
+    """Extract TN automotive skills from text."""
+    try:
+        from backend.services.tn_automotive_taxonomy import tn_extractor
+        skills = tn_extractor.extract_skills(text)
+        return {"skills": skills}
+    except Exception as e:
+        logger.error(f"Extract error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/tn-automotive/gap-analysis")
+async def tn_automotive_gap_analysis(text: str, role_name: str):
+    """Analyze skill gaps for a TN automotive role."""
+    try:
+        from backend.services.tn_automotive_taxonomy import tn_extractor
+        skills = tn_extractor.extract_skills(text)
+        analysis = tn_extractor.get_skill_gaps_for_role(skills, role_name)
+        return analysis
+    except Exception as e:
+        logger.error(f"Gap analysis error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SESSION MANAGEMENT ENDPOINTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.post("/session/init")
+async def init_session():
+    """Initialize a new user session."""
+    session_id = str(uuid.uuid4())
+    return {"session_id": session_id}
+
+
+@app.get("/session/{session_id}")
+async def get_session(session_id: str):
+    """Get session state."""
+    try:
+        from backend.services.state_manager import state
+        snapshot = state.snapshot(session_id)
+        return snapshot
+    except Exception as e:
+        logger.error(f"Session error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post( "/admin/reset-vector-store" )
+async def admin_reset_vector_store () :
+    """
+    Reset vector store to fix dimension mismatch.
+    Call this ONCE after switching embedding models.
+    """
+    try :
+        import shutil
+        from backend.config import settings
+        from pathlib import Path
+
+        chroma_dir = Path( settings.CHROMA_PERSIST_DIR )
+        if chroma_dir.exists() :
+            shutil.rmtree( chroma_dir )
+            logger.info( f"Deleted {chroma_dir}" )
+            chroma_dir.mkdir( parents=True, exist_ok=True )
+
+        # Reinitialize vector store
+        from backend.services.vector_store import vector_store
+        from backend.services.vector_store import VectorStore
+
+        # Force reinitialization
+        vector_store.clear()
+
+        return {
+            "status" : "success",
+            "message" : "Vector store reset. The next match request will re-index jobs.",
+            "directory" : str( chroma_dir )
+        }
+    except Exception as e :
+        logger.error( f"Reset error: {e}" )
+        raise HTTPException( status_code=500, detail=str( e ) )
+
+
+@app.post( "/admin/refresh-jobs" )
+async def admin_refresh_jobs ( resume_text: str = "", location: str = "India" ) :
+    """
+    Manually refresh jobs in vector store.
+    """
+    try :
+        from backend.services.job_scraper import get_job_scraper
+        from backend.services.vector_store import vector_store
+        from backend.services.matcher import get_job_matcher
+
+        # Extract target role from resume or use default
+        if resume_text :
+            matcher = get_job_matcher()
+            target_role = matcher._extract_target_role( resume_text )
+        else :
+            target_role = "Software Engineer"
+
+        scraper = get_job_scraper()
+        jobs = scraper.fetch_jobs( query=target_role, location=location, num_jobs=50 )
+
+        if jobs :
+            indexed = vector_store.index_jobs( jobs )
+            return {
+                "status" : "success",
+                "jobs_fetched" : len( jobs ),
+                "jobs_indexed" : indexed,
+                "target_role" : target_role,
+                "total_jobs" : vector_store.get_stats()["total_jobs"]
+            }
+        else :
+            return {"status" : "error", "message" : "No jobs found"}
+    except Exception as e :
+        logger.error( f"Refresh jobs error: {e}" )
+        raise HTTPException( status_code=500, detail=str( e ) )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# VECTOR STORE MANAGEMENT ENDPOINTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get( "/vector-store/status" )
+async def vector_store_status () :
+    """Check vector store status and contents."""
+    try :
+        from backend.services.vector_store import vector_store
+        stats = vector_store.get_stats()
+
+        # Get a sample of jobs
+        sample = []
+        if stats["total_jobs"] > 0 :
+            try :
+                sample_jobs = vector_store.search( "software", top_k=3 )
+                sample = [
+                    {
+                        "title" : j.get( "title", "" ),
+                        "company" : j.get( "company", "" ),
+                        "location" : j.get( "location", "" )
+                    }
+                    for j in sample_jobs
+                ]
+            except Exception as e :
+                sample = [{"error" : str( e )}]
+
+        return {
+            "total_jobs" : stats["total_jobs"],
+            "freshness" : stats.get( "freshness", "unknown" ),
+            "embedder" : stats.get( "embedder", "unknown" ),
+            "sample_jobs" : sample,
+            "collection_exists" : True
+        }
+    except Exception as e :
+        logger.error( f"Status error: {e}" )
+        return {"error" : str( e ), "total_jobs" : 0}
+
+
+@app.post( "/admin/reset-vector-store" )
+async def admin_reset_vector_store () :
+    """
+    Reset vector store to fix dimension mismatch.
+    Call this ONCE after switching embedding models.
+    """
+    try :
+        import shutil
+        from backend.config import settings
+        from pathlib import Path
+
+        chroma_dir = Path( settings.CHROMA_PERSIST_DIR )
+        if chroma_dir.exists() :
+            shutil.rmtree( chroma_dir )
+            logger.info( f"Deleted {chroma_dir}" )
+            chroma_dir.mkdir( parents=True, exist_ok=True )
+
+        # Reinitialize vector store
+        from backend.services.vector_store import vector_store
+        vector_store.clear()
+
+        return {
+            "status" : "success",
+            "message" : "Vector store reset. The next match request will re-index jobs.",
+            "directory" : str( chroma_dir )
+        }
+    except Exception as e :
+        logger.error( f"Reset error: {e}" )
+        raise HTTPException( status_code=500, detail=str( e ) )
+
+
+@app.post( "/admin/force-refresh-jobs" )
+async def admin_force_refresh_jobs (
+        query: str = "Software Engineer",
+        location: str = "India",
+        num_jobs: int = 30
+) :
+    """Force refresh jobs - clear and re-index."""
+    try :
+        from backend.services.job_scraper import get_job_scraper
+        from backend.services.vector_store import vector_store
+
+        logger.info( f"Force refreshing jobs for query: {query}, location: {location}" )
+
+        # Clear existing jobs
+        vector_store.clear()
+        logger.info( "Cleared existing jobs" )
+
+        # Fetch fresh jobs
+        scraper = get_job_scraper()
+        jobs = scraper.fetch_jobs(
+            query=query,
+            location=location,
+            num_jobs=num_jobs,
+            days_old=30
+        )
+
+        logger.info( f"Fetched {len( jobs )} jobs from scraper" )
 
         if not jobs :
-            return JobMatchResponse(
-                matched_jobs=[], total_jobs_fetched=0, total_jobs_indexed=0,
-                search_query=f"{request.job_query} in {request.location}"
-            )
+            return {
+                "status" : "error",
+                "message" : f"No jobs found for query '{query}' in {location}",
+                "jobs_fetched" : 0
+            }
 
-        # Filter jobs
-        try :
-            from backend.services.job_filter import SmartJobFilter
-            filtered = SmartJobFilter().filter_jobs(
-                jobs,
-                min_match_score=request.min_match_score,
-                experience_level=request.experience_level,
-                posted_within_days=request.posted_within_days or 7,
-                exclude_remote=request.exclude_remote
-            )
-            jobs_to_index = filtered if filtered else jobs
-        except ImportError :
-            jobs_to_index = jobs
+        # Index jobs
+        indexed = vector_store.index_jobs( jobs )
 
-        if force_refresh :
-            await loop.run_in_executor( None, vector_store.clear )
+        # Verify indexing worked
+        final_stats = vector_store.get_stats()
 
-        indexed_count = await loop.run_in_executor(
-            None, lambda : vector_store.index_jobs( jobs_to_index )
-        )
-
-        if indexed_count == 0 :
-            raise HTTPException( status_code=500, detail="Failed to index jobs" )
-
-        matches = await loop.run_in_executor(
-            None,
-            lambda : get_job_matcher().match_resume_to_jobs(
-                resume_text=request.resume_text,
-                top_k=request.top_k,
-                force_refresh=False,
-                location=request.location,
-                user_id=request.user_id,
-            )
-        )
-
-        # Deduplicate matches by job_id
-        seen_ids = set()
-        unique_matches = []
-        for match in matches :
-            job_id = match.get( "job_id" )
-            if job_id and job_id not in seen_ids :
-                seen_ids.add( job_id )
-                unique_matches.append( match )
-
-        matches = unique_matches
-
-        # Career advice — served from cache when possible
-        career_advice_data = None
-        if career_advisor :
-            try :
-                resume_hash = hashlib.md5( request.resume_text.encode() ).hexdigest()[:12]
-                advice_cache_key = (resume_hash, request.job_query.lower().strip())
-
-                if advice_cache_key in _advice_cache :
-                    logger.info( "Career advice served from cache" )
-                    career_advice_data = _advice_cache[advice_cache_key]
-                else :
-                    user_profile = None
-                    if request.user_id :
-                        try :
-                            user_profile = get_feedback_engine().get_profile( request.user_id )
-                        except Exception :
-                            pass
-
-                    career_advice_data = career_advisor.generate_career_advice(
-                        resume_text=request.resume_text,
-                        target_role=request.job_query,
-                        current_role=None,
-                        job_matches=matches[:3],
-                        user_profile=user_profile,
-                    )
-                    _advice_cache[advice_cache_key] = career_advice_data
-                    logger.info( "Career advice generated and cached" )
-
-                # Uncertainty check on advice
-                try :
-                    uh = get_uncertainty_handler()
-                    career_advice_data, advice_report = uh.wrap_advice( career_advice_data )
-                    career_advice_data['_confidence'] = advice_report.to_dict()
-                except Exception :
-                    pass
-
-            except Exception as e :
-                logger.error( f"Career advice failed: {e}" )
-
-        skill_comparison_data = None
-        try :
-            if matches :
-                matcher = get_job_matcher()
-                rs = matcher._extract_skills( request.resume_text )
-                js = matcher._extract_skills( matches[0].get( 'description', '' ) )
-                skill_comparison_data = {
-                    "overall_match" : matches[0].get( 'match_score', 0 ),
-                    "matched_skills" : [{"skill" : s, "status" : "qualified"} for s in set( rs ) & set( js )],
-                    "skill_gaps" : [{"skill" : s, "resume_level" : "none", "required_level" : "intermediate",
-                                     "gap_severity" : "moderate"} for s in set( js ) - set( rs )],
-                    "bonus_skills" : [{"skill" : s} for s in set( rs ) - set( js )],
-                    "resume_skills" : [{"skill" : s, "category" : "Programming"} for s in rs],
-                    "job_skills" : [{"skill" : s, "category" : "Programming"} for s in js],
-                }
-        except Exception as e :
-            logger.error( f"Skill comparison failed: {e}" )
-
-        resp = {
-            "matched_jobs" : [JobMatch( **m ) for m in matches],
-            "total_jobs_fetched" : len( jobs ),
-            "total_jobs_indexed" : indexed_count,
-            "search_query" : f"{request.job_query} in {request.location}",
-            "freshness" : "fresh" if force_refresh else "cached",
-        }
-
-        if career_advice_data :
-            resp["career_advice"] = career_advice_data
-        if skill_comparison_data :
-            resp["skill_comparison"] = skill_comparison_data
-
-        return JobMatchResponse( **resp )
-
-    except HTTPException :
-        raise
-    except Exception as e :
-        logger.error( f"Job matching error: {e}", exc_info=True )
-        raise HTTPException( status_code=500, detail=f"Job matching failed: {e}" )
-# ============================================================================
-# FEEDBACK ENGINE  (/feedback/record and /feedback/stats)
-# ============================================================================
-
-@app.post( "/feedback/record" )
-def record_feedback ( request: FeedbackRecordRequest ) :
-    try :
-        updated_weights = get_feedback_engine().record(
-            user_id=request.user_id,
-            signal_type=request.signal_type,
-            item_id=request.item_id,
-            metadata=request.metadata or {},
-        )
         return {
             "status" : "success",
-            "signal_type" : request.signal_type,
-            "updated_weights" : updated_weights,
+            "query" : query,
+            "location" : location,
+            "jobs_fetched" : len( jobs ),
+            "jobs_indexed" : indexed,
+            "total_jobs_in_store" : final_stats["total_jobs"],
+            "sample_job" : jobs[0] if jobs else None
         }
+
     except Exception as e :
-        logger.error( f"Feedback record error: {e}" )
+        logger.error( f"Force refresh error: {e}", exc_info=True )
         raise HTTPException( status_code=500, detail=str( e ) )
 
 
-@app.get( "/feedback/stats" )
-def feedback_stats ( user_id: str ) :
+@app.post( "/admin/seed-mock-jobs" )
+async def admin_seed_mock_jobs ( query: str = "Software Engineer", location: str = "India", num_jobs: int = 20 ) :
+    """Seed vector store with mock jobs for testing."""
     try :
-        stats = get_feedback_engine().get_stats( user_id )
-        return {"status" : "success", "stats" : stats}
-    except Exception as e :
-        logger.error( f"Feedback stats error: {e}" )
-        raise HTTPException( status_code=500, detail=str( e ) )
+        from backend.services.vector_store import vector_store
 
+        # Clear existing
+        vector_store.clear()
 
-# ============================================================================
-# LEARNING-TO-RANK  (/ranking/preference and /ranking/stats)
-# ============================================================================
+        # Generate mock jobs directly
+        mock_jobs = []
+        roles = [
+            f"Senior {query}", f"Junior {query}", f"Lead {query}",
+            f"{query} Specialist", f"{query} Developer", f"Principal {query}",
+            f"{query} Architect", f"{query} Consultant", f"Staff {query}"
+        ]
+        companies = ["Google", "Microsoft", "Amazon", "Apple", "Meta", "Netflix", "Tesla"]
 
-@app.post( "/ranking/preference" )
-def record_ranking_preference ( request: RankingPreferenceRequest ) :
-    try :
-        get_ltr_engine().record_preference(
-            user_id=request.user_id,
-            winner=request.winner,
-            loser=request.loser,
-            context=request.context or {},
-        )
-        return {"status" : "success", "message" : "Preference recorded"}
-    except Exception as e :
-        logger.error( f"LTR preference record error: {e}" )
-        raise HTTPException( status_code=500, detail=str( e ) )
+        for i in range( num_jobs ) :
+            job_id = f"seed_job_{i}"
+            mock_jobs.append( {
+                "id" : job_id,
+                "title" : roles[i % len( roles )],
+                "company" : companies[i % len( companies )],
+                "location" : location,
+                "description" : f"We are hiring a {roles[i % len( roles )]} at {companies[i % len( companies )]}. "
+                                f"Requirements: Experience in {query}, strong coding skills, team player.",
+                "apply_link" : f"https://example.com/jobs/{job_id}",
+                "posted_at" : f"{i + 1} days ago",
+                "employment_type" : "Full-time",
+                "days_old" : i,
+                "fetched_at" : datetime.now().isoformat(),
+            } )
 
+        indexed = vector_store.index_jobs( mock_jobs )
 
-@app.get( "/ranking/stats" )
-def ranking_stats ( user_id: str ) :
-    try :
-        stats = get_ltr_engine().get_stats( user_id )
-        return {"status" : "success", "stats" : stats}
-    except Exception as e :
-        logger.error( f"LTR stats error: {e}" )
-        raise HTTPException( status_code=500, detail=str( e ) )
-
-
-# ============================================================================
-# AGENT ORCHESTRATOR  (/agent/run and /agent/intent)
-# ============================================================================
-
-@app.post( "/agent/run" )
-def agent_run ( request: AgentRunRequest ) :
-    try :
-        orch = get_orchestrator()
-        orch.load_resume( request.resume_text, request.target_role )
-
-        result = orch.run_goal(
-            goal=request.goal,
-            user_id=request.user_id or "",
-            extra_context=request.extra_context,
-            stop_on_error=request.stop_on_error,
-        )
-        return {"status" : "success", **result}
-    except Exception as e :
-        logger.error( f"Agent run error: {e}", exc_info=True )
-        raise HTTPException( status_code=500, detail=str( e ) )
-
-
-@app.post( "/agent/intent" )
-def agent_intent ( request: AgentIntentRequest ) :
-    try :
-        orch = get_orchestrator()
-        orch.load_resume( request.resume_text, request.target_role )
-
-        result = orch.plan_from_intent(
-            user_intent=request.intent,
-            user_id=request.user_id or "",
-        )
-        return {"status" : "success", **result}
-    except Exception as e :
-        logger.error( f"Agent intent error: {e}", exc_info=True )
-        raise HTTPException( status_code=500, detail=str( e ) )
-
-
-# ============================================================================
-# AGENT DEBATE  (/debate/run and /debate/critique)
-# ============================================================================
-
-@app.post( "/debate/run" )
-def debate_run ( request: DebateRunRequest ) :
-    try :
-        debate_orch = get_debate_orchestrator()
-
-        context = dict( request.context )
-        if request.resume_text :
-            context["resume_text"] = request.resume_text[:1500]
-        if request.user_id :
-            try :
-                context["user_profile"] = get_feedback_engine().get_profile( request.user_id )
-            except Exception :
-                pass
-
-        result = debate_orch.run_debate(
-            topic=request.topic,
-            context=context,
-            max_rounds=request.max_rounds,
-        )
-        return {"status" : "success", **debate_orch.to_dict( result )}
-    except Exception as e :
-        logger.error( f"Debate run error: {e}", exc_info=True )
-        raise HTTPException( status_code=500, detail=str( e ) )
-
-
-@app.post( "/debate/critique" )
-def debate_critique ( request: DebateCritiqueRequest ) :
-    try :
-        result = get_debate_orchestrator().quick_critique(
-            plan=request.plan,
-            context=request.context,
-        )
-        return {"status" : "success", "critique" : result}
-    except Exception as e :
-        logger.error( f"Debate critique error: {e}", exc_info=True )
-        raise HTTPException( status_code=500, detail=str( e ) )
-
-
-# ============================================================================
-# ROADMAP & PROJECTS
-# ============================================================================
-
-@app.post( "/generate/roadmap" )
-def generate_roadmap ( request: RoadmapRequest ) :
-    if not request.target_role.strip() :
-        raise HTTPException( status_code=400, detail="target_role is required" )
-    try :
-        roadmap = get_roadmap_generator().generate_roadmap(
-            resume_text=request.resume_text, target_role=request.target_role,
-            skill_gaps=request.skill_gaps, duration_weeks=request.duration_weeks,
-            experience_level=request.experience_level
-        )
-        return {"status" : "success", "roadmap" : roadmap}
-    except Exception as e :
-        raise HTTPException( status_code=500, detail=str( e ) )
-
-
-@app.post( "/generate/projects" )
-def generate_projects ( request: ProjectRequest ) :
-    if not request.target_role.strip() :
-        raise HTTPException( status_code=400, detail="target_role is required" )
-    try :
-        projects = get_project_generator().suggest_projects(
-            resume_text=request.resume_text, target_role=request.target_role,
-            skill_gaps=request.skill_gaps, difficulty=request.difficulty,
-            num_projects=request.num_projects
-        )
-        return {"status" : "success", "projects" : projects}
-    except Exception as e :
-        raise HTTPException( status_code=500, detail=str( e ) )
-
-
-# Route aliases
-@app.post( "/roadmap/generate" )
-def generate_roadmap_alias ( request: RoadmapRequest ) :
-    return generate_roadmap( request )
-
-
-@app.post( "/projects/suggest" )
-def suggest_projects_alias ( request: ProjectRequest ) :
-    return generate_projects( request )
-
-
-# ============================================================================
-# ROADMAP IMPORT
-# ============================================================================
-
-@app.post( "/progress/roadmap/import" )
-def import_roadmap ( request: RoadmapImportRequest ) :
-    try :
-        tracker = get_progress_tracker()
-        result = tracker.import_roadmap( request.user_id, request.roadmap )
-        if "error" in result :
-            raise HTTPException( status_code=400, detail=result["error"] )
-        roadmap_with_progress = tracker.get_roadmap_with_progress( request.user_id )
-        return {"status" : "success", "import_result" : result, "roadmap" : roadmap_with_progress}
-    except HTTPException :
-        raise
-    except Exception as e :
-        logger.error( f"Roadmap import error: {e}" )
-        raise HTTPException( status_code=500, detail=str( e ) )
-
-
-@app.get( "/progress/{user_id}/roadmap" )
-def get_roadmap_progress ( user_id: str ) :
-    try :
-        tracker = get_progress_tracker()
-        roadmap = tracker.get_roadmap_with_progress( user_id )
-        return {"status" : "success", "roadmap" : roadmap}
-    except Exception as e :
-        raise HTTPException( status_code=500, detail=str( e ) )
-
-
-@app.post( "/progress/roadmap/task/update" )
-def update_roadmap_task ( request: TaskUpdateRequest ) :
-    try :
-        tracker = get_progress_tracker()
-        result = tracker.update_task( request.user_id, request.week_key, request.task_id, request.done )
-        if not result.get( "updated" ) :
-            raise HTTPException( status_code=404, detail=result.get( "error", "Task not found" ) )
-        return {"status" : "success", "result" : result}
-    except HTTPException :
-        raise
-    except Exception as e :
-        raise HTTPException( status_code=500, detail=str( e ) )
-
-
-# ============================================================================
-# PROGRESS TRACKER — PROJECTS
-# ============================================================================
-
-@app.post( "/progress/projects/add" )
-def add_project ( request: ProjectAddRequest ) :
-    try :
-        project = get_progress_tracker().add_project( request.user_id, request.project )
-        return {"status" : "success", "project" : project}
-    except Exception as e :
-        raise HTTPException( status_code=500, detail=str( e ) )
-
-
-@app.patch( "/progress/projects/update" )
-def update_project ( request: ProjectUpdateRequest ) :
-    try :
-        result = get_progress_tracker().update_project( request.user_id, request.project_id, request.updates )
-        if "error" in result :
-            raise HTTPException( status_code=404, detail=result["error"] )
-        return {"status" : "success", "project" : result}
-    except HTTPException :
-        raise
-    except Exception as e :
-        raise HTTPException( status_code=500, detail=str( e ) )
-
-
-@app.post( "/progress/projects/import" )
-def import_projects ( request: RoadmapImportRequest ) :
-    try :
-        tracker = get_progress_tracker()
-        projects = request.roadmap.get( "projects", request.roadmap ) if isinstance( request.roadmap, dict ) else []
-        result = tracker.import_projects( request.user_id,
-                                          projects if isinstance( projects, list ) else [request.roadmap] )
-        return {"status" : "success", **result}
-    except Exception as e :
-        raise HTTPException( status_code=500, detail=str( e ) )
-
-
-# ============================================================================
-# PROGRESS TRACKER — DSA
-# ============================================================================
-
-@app.post( "/progress/dsa/log" )
-def log_dsa_problem ( request: DSALogRequest ) :
-    try :
-        result = get_progress_tracker().log_dsa_problem(
-            request.user_id, request.topic, request.problem_name,
-            request.difficulty, request.solved
-        )
-        return {"status" : "success", "topic_progress" : result}
-    except Exception as e :
-        raise HTTPException( status_code=500, detail=str( e ) )
-
-
-@app.post( "/progress/dsa/bulk-update" )
-def bulk_update_dsa ( request: DSABulkUpdateRequest ) :
-    try :
-        result = get_progress_tracker().bulk_update_dsa(
-            request.user_id, request.topic, request.solved_count
-        )
-        return {"status" : "success", "topic_progress" : result}
-    except Exception as e :
-        raise HTTPException( status_code=500, detail=str( e ) )
-
-
-# ============================================================================
-# PROGRESS TRACKER — INTERVIEWS
-# ============================================================================
-
-@app.post( "/progress/interviews/add" )
-def add_interview ( request: InterviewAddRequest ) :
-    try :
-        interview = get_progress_tracker().add_interview(
-            request.user_id, request.company, request.role, request.source
-        )
-        return {"status" : "success", "interview" : interview}
-    except Exception as e :
-        raise HTTPException( status_code=500, detail=str( e ) )
-
-
-@app.patch( "/progress/interviews/stage" )
-def update_interview_stage ( request: InterviewStageUpdateRequest ) :
-    try :
-        result = get_progress_tracker().update_interview_stage(
-            request.user_id, request.interview_id, request.new_stage, request.notes
-        )
-        if "error" in result :
-            raise HTTPException( status_code=404, detail=result["error"] )
-        return {"status" : "success", "interview" : result}
-    except HTTPException :
-        raise
-    except Exception as e :
-        raise HTTPException( status_code=500, detail=str( e ) )
-
-
-@app.delete( "/progress/interviews/{user_id}/{interview_id}" )
-def delete_interview ( user_id: str, interview_id: str ) :
-    try :
-        result = get_progress_tracker().delete_interview( user_id, interview_id )
-        return {"status" : "success", "deleted" : result.get( "deleted", False )}
-    except Exception as e :
-        raise HTTPException( status_code=500, detail=str( e ) )
-
-
-@app.get( "/progress/{user_id}/interviews/analytics" )
-def get_interview_analytics ( user_id: str ) :
-    try :
-        analytics = get_progress_tracker().get_interview_analytics( user_id )
-        return {"status" : "success", "analytics" : analytics}
-    except Exception as e :
-        raise HTTPException( status_code=500, detail=str( e ) )
-
-
-# ============================================================================
-# PROGRESS SUMMARY
-# ============================================================================
-
-@app.get( "/progress/{user_id}/summary" )
-def get_progress_summary ( user_id: str ) :
-    try :
-        summary = get_progress_tracker().get_summary( user_id )
-        return {"status" : "success", "summary" : summary}
-    except Exception as e :
-        raise HTTPException( status_code=500, detail=str( e ) )
-
-
-@app.get( "/progress/{user_id}/full" )
-def get_full_progress ( user_id: str ) :
-    try :
-        tracker = get_progress_tracker()
-        state = tracker.get_state( user_id )
-        summary = tracker.get_summary( user_id )
-        roadmap = tracker.get_roadmap_with_progress( user_id )
         return {
             "status" : "success",
-            "user_id" : user_id,
-            "summary" : summary,
-            "roadmap" : roadmap,
-            "projects" : state.get( "projects", [] ),
-            "dsa" : state.get( "dsa", {} ),
-            "interviews" : state.get( "interviews", [] ),
-            "activity_log" : state.get( "activity_log", [] )[-30 :],
+            "jobs_created" : len( mock_jobs ),
+            "jobs_indexed" : indexed,
+            "total_jobs" : vector_store.get_stats()["total_jobs"]
         }
     except Exception as e :
+        logger.error( f"Seed error: {e}" )
         raise HTTPException( status_code=500, detail=str( e ) )
+# ─────────────────────────────────────────────────────────────────────────────
+# INTERVIEW — LIVE REST ENDPOINTS  (/interview/live/start, /interview/live/next)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class LiveInterviewStartRequest(BaseModel):
+    role: str
+    interview_type: str = "mixed"
+    resume_text: str = ""
+    num_questions: int = 10
 
 
-# ============================================================================
-# JOB COACH CHATBOT
-# ============================================================================
-
-@app.post( "/coach/chat" )
-def job_coach_chat ( request: JobCoachRequest ) :
-    if not request.messages :
-        raise HTTPException( status_code=400, detail="messages list is required" )
-    try :
-        messages = [{"role" : m.role, "content" : m.content} for m in request.messages]
-        reply = get_job_coach().chat( messages=messages, resume_text=request.resume_text )
-        return {"status" : "success", "reply" : reply}
-    except Exception as e :
-        raise HTTPException( status_code=500, detail=str( e ) )
+class LiveInterviewNextRequest(BaseModel):
+    session_id: str
+    transcript: str
 
 
-# ============================================================================
-# MARKET INSIGHTS
-# ============================================================================
-
-@app.post( "/insights/market" )
-def market_insights ( request: MarketInsightsRequest ) :
-    if not request.role.strip() :
-        raise HTTPException( status_code=400, detail="role is required" )
-    try :
-        result = get_market_insights().get_insights(
-            role=request.role, skills=request.skills, location=request.location
-        )
-        return {"status" : "success", **result}
-    except Exception as e :
-        raise HTTPException( status_code=500, detail=str( e ) )
-
-
-# ============================================================================
-# INTERVIEW COACH
-# ============================================================================
-
-@app.post( "/interview/questions" )
-def get_interview_questions ( request: InterviewQuestionsRequest ) :
-    if not request.role.strip() :
-        raise HTTPException( status_code=400, detail="role is required" )
-    try :
-        questions = get_interview_coach().generate_questions(
-            role=request.role, interview_type=request.interview_type,
-            resume_text=request.resume_text, num_questions=request.num_questions
-        )
-        return {"status" : "success", "questions" : questions}
-    except Exception as e :
-        raise HTTPException( status_code=500, detail=str( e ) )
-
-
-@app.post( "/interview/chat" )
-def interview_chat ( request: InterviewChatRequest ) :
-    if not request.messages :
-        raise HTTPException( status_code=400, detail="messages list is required" )
-    if not request.role.strip() :
-        raise HTTPException( status_code=400, detail="role is required" )
-    try :
-        messages = [{"role" : m.role, "content" : m.content} for m in request.messages]
-        reply = get_interview_coach().chat(
-            messages=messages, role=request.role,
-            interview_type=request.interview_type, resume_text=request.resume_text
-        )
-        return {"status" : "success", "reply" : reply}
-    except Exception as e :
-        raise HTTPException( status_code=500, detail=str( e ) )
-
-
-@app.post( "/interview/evaluate" )
-def evaluate_answer ( request: EvaluateAnswerRequest ) :
-    if not request.question.strip() or not request.answer.strip() :
-        raise HTTPException( status_code=400, detail="question and answer are required" )
-    try :
-        feedback = get_interview_coach().evaluate_answer(
-            question=request.question, answer=request.answer,
-            role=request.role, interview_type=request.interview_type
-        )
-        return {"status" : "success", "feedback" : feedback}
-    except Exception as e :
-        raise HTTPException( status_code=500, detail=str( e ) )
-
-
-# ============================================================================
-# RESUME REWRITER
-# ============================================================================
-
-@app.post( "/resume/rewrite" )
-def rewrite_resume ( request: ResumeRewriteRequest ) :
-    if not request.resume_text.strip() :
-        raise HTTPException( status_code=400, detail="resume_text is required" )
-    if not request.target_role.strip() :
-        raise HTTPException( status_code=400, detail="target_role is required" )
-    try :
-        result = resume_rewriter.rewrite(
+@app.post("/interview/live/start")
+async def live_interview_start(request: LiveInterviewStartRequest):
+    """Start a live AI mock-interview session and return the first question."""
+    try:
+        from backend.services.live_session import interview_engine
+        session_id = str(__import__("uuid").uuid4())
+        result = interview_engine.start_session(
+            session_id=session_id,
+            role=request.role,
+            interview_type=request.interview_type,
             resume_text=request.resume_text,
-            target_role=request.target_role,
-            tone=request.tone
+            num_questions=request.num_questions,
         )
-        return {"status" : "success", "result" : result}
-    except Exception as e :
-        logger.error( f"Resume rewrite error: {e}", exc_info=True )
-        raise HTTPException( status_code=500, detail=str( e ) )
+        return result
+    except Exception as e:
+        logger.error(f"Live interview start error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-# ============================================================================
-# ATS RESUME SCORER
-# ============================================================================
-
-@app.post( "/ats/score" )
-def score_resume ( request: ATSScoreRequest ) :
-    if not request.resume_text.strip() :
-        raise HTTPException( status_code=400, detail="resume_text is required" )
-    try :
-        result = ats_scorer.score_resume(
-            resume_text=request.resume_text,
-            target_role=request.target_role or "Software Engineer",
-            job_description=request.job_description or None,
+@app.post("/interview/live/next")
+async def live_interview_next(request: LiveInterviewNextRequest):
+    """Submit answer transcript and get the next question (or final summary)."""
+    try:
+        from backend.services.live_session import interview_engine
+        result = interview_engine.next_question(
+            session_id=request.session_id,
+            transcript=request.transcript,
         )
+        return result
+    except Exception as e:
+        logger.error(f"Live interview next error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
-        # Attach confidence report
-        try :
-            uh = get_uncertainty_handler()
-            result, ats_report = uh.wrap_ats( result )
-            result['_confidence'] = ats_report.to_dict()
-        except Exception :
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HR PANEL GENERATOR  (self-contained — produces the exact shape HRResults needs)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _generate_hr_panel(
+    resume_text: str,
+    target_role: str,
+    company_type: Optional[str] = None,
+    focus_area: Optional[str] = None,
+    num_questions: int = 8,
+) -> Dict:
+    """
+    Call the LLM to produce a full HR recruiter panel in the exact JSON shape
+    that the frontend HRResults component expects:
+      hire_verdict, verdict_summary, verdict_confidence,
+      dimension_scores, green_flags, red_flags,
+      questions_to_ask, salary_bracket_inr,
+      suggested_interview_rounds, recruiter_notes
+    """
+    import re as _re
+    from backend.services.llm import llm_call_sync
+
+    company_ctx = company_type or "mid-size"
+    focus_ctx   = focus_area   or "general"
+
+    prompt = f"""You are a senior HR recruiter at a {company_ctx} tech company doing a {focus_ctx} evaluation.
+Analyse the resume below for the role of "{target_role}" and return ONLY a single valid JSON object.
+
+CRITICAL JSON RULES:
+- Double quotes for ALL strings
+- No trailing commas
+- Escape any double quotes inside string values with backslash
+- All text on single lines (no newlines inside string values)
+
+RESUME:
+{resume_text[:4000]}
+
+Return EXACTLY this structure (fill in real values — do NOT keep placeholders):
+{{
+  "hire_verdict": "Yes",
+  "verdict_summary": "one sentence summary of hiring decision",
+  "verdict_confidence": 72,
+  "dimension_scores": {{
+    "technical_fit": 7,
+    "experience_relevance": 6,
+    "culture_fit": 7,
+    "growth_potential": 8,
+    "communication_clarity": 7
+  }},
+  "green_flags": ["strength 1", "strength 2", "strength 3"],
+  "red_flags": ["concern 1", "concern 2"],
+  "questions_to_ask": [
+    {{"question": "Tell me about a challenging project.", "type": "behavioural", "reason": "Assesses problem-solving."}},
+    {{"question": "How do you stay current with {target_role} trends?", "type": "technical", "reason": "Checks continuous learning."}}
+  ],
+  "salary_bracket_inr": "12-18 LPA",
+  "suggested_interview_rounds": ["HR Screening", "Technical Round", "Manager Round"],
+  "recruiter_notes": "Internal candid note about this candidate."
+}}
+
+hire_verdict must be one of: "Strong Yes", "Yes", "Maybe", "No", "Strong No"
+questions_to_ask must have exactly {num_questions} items, type must be one of: technical, behavioural, situational
+"""
+
+    try:
+        raw = llm_call_sync(
+            system="You are an expert HR recruiter AI. Respond with ONLY valid JSON. No markdown, no extra text.",
+            user=prompt,
+            temp=0.3,
+            max_tokens=2000,
+        )
+    except Exception as e:
+        logger.error(f"HR panel LLM call failed: {e}")
+        return _hr_panel_fallback(target_role, company_type)
+
+    # ── Clean response ────────────────────────────────────────────────────────
+    raw = _re.sub(r'```json\s*', '', raw or '')
+    raw = _re.sub(r'```\s*', '', raw)
+    start = raw.find('{')
+    end   = raw.rfind('}')
+    if start >= 0 and end > start:
+        raw = raw[start:end + 1]
+    else:
+        return _hr_panel_fallback(target_role, company_type)
+
+    raw = _re.sub(r',\s*}', '}', raw)
+    raw = _re.sub(r',\s*]', ']', raw)
+
+    # ── Parse ─────────────────────────────────────────────────────────────────
+    result = None
+    try:
+        result = json.loads(raw)
+    except json.JSONDecodeError:
+        # Try closing unclosed braces
+        try:
+            raw += '}' * (raw.count('{') - raw.count('}'))
+            result = json.loads(raw)
+        except Exception:
             pass
 
-        return {"status" : "success", "result" : result}
-    except Exception as e :
-        logger.error( f"ATS scoring error: {e}", exc_info=True )
-        raise HTTPException( status_code=500, detail=str( e ) )
+    if not isinstance(result, dict):
+        return _hr_panel_fallback(target_role, company_type)
+
+    # ── Validate & fill defaults ──────────────────────────────────────────────
+    valid_verdicts = {"Strong Yes", "Yes", "Maybe", "No", "Strong No"}
+    if result.get("hire_verdict") not in valid_verdicts:
+        result["hire_verdict"] = "Maybe"
+
+    result.setdefault("verdict_summary",   "Resume reviewed by AI recruiter.")
+    result.setdefault("verdict_confidence", 60)
+    result.setdefault("dimension_scores", {
+        "technical_fit": 5, "experience_relevance": 5,
+        "culture_fit": 5, "growth_potential": 5, "communication_clarity": 5,
+    })
+    result.setdefault("green_flags",   [])
+    result.setdefault("red_flags",     [])
+    result.setdefault("questions_to_ask", [])
+    result.setdefault("salary_bracket_inr",          "Market rate")
+    result.setdefault("suggested_interview_rounds",  ["HR Screening", "Technical Round"])
+    result.setdefault("recruiter_notes",             "Candidate requires further evaluation.")
+
+    # Clamp confidence
+    try:
+        result["verdict_confidence"] = max(0, min(100, int(result["verdict_confidence"])))
+    except (ValueError, TypeError):
+        result["verdict_confidence"] = 60
+
+    # Clamp dimension scores to 0–10
+    for k, v in result.get("dimension_scores", {}).items():
+        try:
+            result["dimension_scores"][k] = max(0, min(10, int(v)))
+        except (ValueError, TypeError):
+            result["dimension_scores"][k] = 5
+
+    # Ensure questions have required keys
+    cleaned_questions = []
+    valid_types = {"technical", "behavioural", "situational"}
+    for q in result.get("questions_to_ask", []):
+        if isinstance(q, dict) and q.get("question"):
+            cleaned_questions.append({
+                "question": str(q.get("question", "")),
+                "type":     q.get("type", "behavioural") if q.get("type") in valid_types else "behavioural",
+                "reason":   str(q.get("reason", "")),
+            })
+    result["questions_to_ask"] = cleaned_questions
+
+    return result
 
 
-# ============================================================================
-# AI HR RECRUITER PANEL
-# ============================================================================
-
-@app.post( "/interview/hr-panel" )
-def hr_recruiter_panel ( request: HRRecruiterRequest ) :
-    if not request.resume_text.strip() :
-        raise HTTPException( status_code=400, detail="resume_text is required" )
-
-    panel = _run_hr_panel(
-        resume_text=request.resume_text,
-        target_role=request.target_role,
-        company_type=request.company_type,
-        focus_area=request.focus_area,
-        job_description=request.job_description,
-    )
-    return {"status" : "success", "panel" : panel}
-
-
-def _fix_json_string_hr ( json_str: str ) -> str :
-    """Fix common JSON issues in HR panel responses."""
-    import re
-
-    # Remove any BOM characters
-    if json_str.startswith( '\ufeff' ) :
-        json_str = json_str[1 :]
-
-    # Fix single quotes around property names
-    json_str = re.sub( r"([{,])\s*'([^']+)'\s*:", r'\1"\2":', json_str )
-    # Fix single quotes around string values
-    json_str = re.sub( r':\s*\'([^\']*)\'\s*([,}])', r': "\1"\2', json_str )
-
-    # Remove trailing commas
-    json_str = re.sub( r',\s*}', '}', json_str )
-    json_str = re.sub( r',\s*]', ']', json_str )
-
-    # Fix missing quotes around property names
-    json_str = re.sub( r'([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:', r'\1"\2":', json_str )
-
-    return json_str
-
-
-def _get_fallback_hr_panel ( target_role: str, company_type: str, focus_area: str,
-                             job_description: Optional[str] = None ) -> dict :
-    """Return a fallback HR panel structure when API calls fail."""
-    import random
-
-    verdicts = ["Maybe", "Yes", "No"]
-    verdict = random.choice( verdicts )
-
-    questions = [
-        {
-            "question" : f"Can you describe your experience with {target_role} responsibilities?",
-            "reason" : "To assess practical experience depth",
-            "type" : "technical"
-        },
-        {
-            "question" : "Tell me about a challenging project you worked on and how you overcame obstacles.",
-            "reason" : "To evaluate problem-solving approach",
-            "type" : "behavioural"
-        },
-        {
-            "question" : "Where do you see your career in the next 3-5 years?",
-            "reason" : "To understand career alignment and growth potential",
-            "type" : "situational"
-        }
-    ]
-
-    if job_description :
-        questions.append( {
-            "question" : "How does your experience specifically match the requirements in the job description?",
-            "reason" : "To assess fit for this specific role",
-            "type" : "technical"
-        } )
-
+def _hr_panel_fallback(target_role: str, company_type: Optional[str]) -> Dict:
+    """Fallback HR panel when LLM call or parsing fails."""
     return {
-        "hire_verdict" : verdict,
-        "verdict_confidence" : 65,
-        "verdict_summary" : f"Based on available information, the candidate shows {verdict.lower()} potential for the {target_role} position.",
-        "dimension_scores" : {
-            "technical_fit" : random.randint( 5, 8 ),
-            "experience_relevance" : random.randint( 5, 8 ),
-            "culture_fit" : random.randint( 6, 9 ),
-            "growth_potential" : random.randint( 6, 9 ),
-            "communication_clarity" : random.randint( 6, 9 )
+        "hire_verdict":            "Maybe",
+        "verdict_summary":         f"Could not fully evaluate candidate for {target_role}. Manual review recommended.",
+        "verdict_confidence":      50,
+        "dimension_scores": {
+            "technical_fit":         5,
+            "experience_relevance":  5,
+            "culture_fit":           5,
+            "growth_potential":      5,
+            "communication_clarity": 5,
         },
-        "green_flags" : ["Relevant experience mentioned", "Good communication skills", "Career progression evident"],
-        "red_flags" : ["Gaps in specific technical skills", "Could provide more quantifiable achievements"],
-        "questions_to_ask" : questions,
-        "salary_bracket_inr" : "₹12-18 LPA",
-        "suggested_interview_rounds" : ["Initial HR Screen", "Technical Assessment", "Hiring Manager Interview"],
-        "recruiter_notes" : "Candidate shows promise but requires deeper technical validation. Recommend proceeding to next round."
+        "green_flags":  ["Resume submitted for review"],
+        "red_flags":    ["Automated analysis incomplete — please review manually"],
+        "questions_to_ask": [
+            {"question": f"Walk me through your most relevant experience for this {target_role} role.", "type": "behavioural", "reason": "Establishes baseline fit."},
+            {"question": "What motivated you to apply for this position?",                              "type": "behavioural", "reason": "Gauges genuine interest."},
+            {"question": "Describe a challenging problem you solved recently.",                         "type": "situational", "reason": "Assesses problem-solving ability."},
+        ],
+        "salary_bracket_inr":         "Market rate",
+        "suggested_interview_rounds":  ["HR Screening", "Technical Round", "Manager Round"],
+        "recruiter_notes":             "Automated HR panel generation encountered an error. Manual screening advised.",
     }
 
 
-def _run_hr_panel (
-        resume_text: str,
-        target_role: str,
-        company_type: str = "startup",
-        focus_area: str = "general",
-        job_description: Optional[str] = None,
-) -> dict :
-    """
-    Internal helper for HR panel with improved error handling.
-    """
-    import re as _re, json as _json
+# ─────────────────────────────────────────────────────────────────────────────
+# RESUME ANALYZER  (/resume/analyze)  +  HR PANEL  (/interview/hr-panel)
+# ─────────────────────────────────────────────────────────────────────────────
 
-    company_context = {
-        "startup" : "fast-growing startup (values hustle, breadth, ownership, speed)",
-        "mid-size" : "mid-size product company (values depth, process, collaboration)",
-        "enterprise" : "large enterprise (values stability, compliance, domain expertise)",
-        "faang" : "FAANG/top-tier tech company (values problem-solving, scale, CS fundamentals)",
-    }.get( company_type, "tech company" )
-
-    focus_context = {
-        "general" : "holistic profile evaluation",
-        "technical" : "technical depth, CS fundamentals, system design",
-        "behavioural" : "leadership, teamwork, conflict resolution, cultural fit",
-        "compensation" : "market value, compensation expectations, negotiation readiness",
-    }.get( focus_area, "holistic profile evaluation" )
-
-    jd_section = ""
-    jd_note = ""
-    if job_description and job_description.strip() :
-        jd_section = f"\nJOB DESCRIPTION (evaluate the candidate against THIS, not generic role expectations):\n{job_description[:2000]}\n"
-        jd_note = " Reference specific requirements from the Job Description when explaining your verdict and flagging gaps."
-
-    prompt = f"""You are a senior HR recruiter at a {company_context}.
-You are screening a candidate for the role: "{target_role}"
-Focus area for this evaluation: {focus_context}{jd_note}
-{jd_section}
-RESUME:
-{resume_text[:2500]}
-
-Produce a JSON hiring assessment. Return ONLY valid JSON, no markdown:
-{{
-  "hire_verdict": "<Strong Yes | Yes | Maybe | No | Strong No>",
-  "verdict_confidence": <integer 0-100>,
-  "verdict_summary": "<2-3 sentences explaining the decision{' referencing JD requirements' if jd_section else ''}>",
-  "dimension_scores": {{
-    "technical_fit": <0-10>,
-    "experience_relevance": <0-10>,
-    "culture_fit": <0-10>,
-    "growth_potential": <0-10>,
-    "communication_clarity": <0-10>
-  }},
-  "green_flags": ["<positive signal 1>", "<positive signal 2>", "<positive signal 3>"],
-  "red_flags": ["<concern 1>", "<concern 2>"],
-  "questions_to_ask": [
-    {{"question": "<interview question>", "reason": "<why this question matters>", "type": "<technical|behavioural|situational>"}},
-    {{"question": "<interview question>", "reason": "<why>", "type": "<type>"}},
-    {{"question": "<interview question>", "reason": "<why>", "type": "<type>"}},
-    {{"question": "<interview question>", "reason": "<why>", "type": "<type>"}},
-    {{"question": "<interview question>", "reason": "<why>", "type": "<type>"}}
-  ],
-  "salary_bracket_inr": "<e.g. ₹12-16 LPA based on profile>",
-  "suggested_interview_rounds": ["<round 1>", "<round 2>", "<round 3>"],
-  "recruiter_notes": "<2-3 candid internal notes a recruiter would write>"
-}}"""
-
-    try :
-        from backend.services.llm import llm_json
-        result = llm_json(
-            system="You are an expert HR recruiter. Always respond with valid JSON only.",
-            user=prompt,
-            temp=0.4,
-            max_tokens=2000,
-        )
-        return result
-    except _json.JSONDecodeError as e :
-        logger.error( f"HR panel JSON parse error: {e}" )
-        return _get_fallback_hr_panel( target_role, company_type, focus_area, job_description )
-    except Exception as e :
-        logger.error( f"HR panel error: {e}" )
-        return _get_fallback_hr_panel( target_role, company_type, focus_area, job_description )
+class ResumeAnalyzeRequest(BaseModel):
+    resume_text: str
+    target_role: str = "Software Engineer"
+    job_description: Optional[str] = None
+    company_type: Optional[str] = None
+    focus_area: Optional[str] = None
 
 
-# ============================================================================
-# COMBINED RESUME ANALYZER  (/resume/analyze)
-# ============================================================================
-
-@app.post( "/resume/analyze" )
-def analyze_resume ( request: ResumeAnalyzeRequest ) :
-    """
-    Runs ATS scoring and HR recruiter panel in parallel and returns both results.
-    """
-    if not request.resume_text.strip() :
-        raise HTTPException( status_code=400, detail="resume_text is required" )
-    if not request.target_role.strip() :
-        raise HTTPException( status_code=400, detail="target_role is required" )
-
-    import concurrent.futures
-
+@app.post("/resume/analyze")
+async def analyze_resume(request: ResumeAnalyzeRequest):
+    """ATS score + HR panel in one call (used by ResumeAnalyzer component)."""
     ats_result = None
-    hr_panel = None
-    ats_error = None
-    hr_error = None
+    ats_error  = None
+    hr_panel   = None
+    hr_error   = None
 
-    def run_ats () :
-        return ats_scorer.score_resume(
+    # ── ATS scoring ──────────────────────────────────────────────────────────
+    try:
+        from backend.services.ats_scorer import get_ats_scorer
+        scorer = get_ats_scorer()
+        ats_result = scorer.score(
             resume_text=request.resume_text,
             target_role=request.target_role,
-            job_description=request.job_description or None,
+            job_description=request.job_description or "",
         )
+    except Exception as e:
+        ats_error = str(e)
+        logger.error(f"ATS scoring error: {e}", exc_info=True)
 
-    def run_hr () :
-        return _run_hr_panel(
+    # ── HR panel ─────────────────────────────────────────────────────────────
+    try:
+        hr_panel = _generate_hr_panel(
             resume_text=request.resume_text,
             target_role=request.target_role,
             company_type=request.company_type,
             focus_area=request.focus_area,
-            job_description=request.job_description or None,
+            num_questions=8,
         )
-
-    with concurrent.futures.ThreadPoolExecutor( max_workers=2 ) as pool :
-        ats_future = pool.submit( run_ats )
-        hr_future = pool.submit( run_hr )
-
-        try :
-            ats_result = ats_future.result( timeout=60 )
-            # Attach confidence report
-            try :
-                uh = get_uncertainty_handler()
-                ats_result, ats_report = uh.wrap_ats( ats_result )
-                ats_result["_confidence"] = ats_report.to_dict()
-            except Exception :
-                pass
-        except Exception as e :
-            logger.error( f"ATS scoring error in /resume/analyze: {e}" )
-            ats_error = str( e )
-
-        try :
-            hr_panel = hr_future.result( timeout=60 )
-        except Exception as e :
-            logger.error( f"HR panel error in /resume/analyze: {e}" )
-            hr_error = str( e )
-
-    if ats_result is None and hr_panel is None :
-        raise HTTPException(
-            status_code=500,
-            detail=f"Both analyses failed. ATS: {ats_error}. HR: {hr_error}",
-        )
+    except Exception as e:
+        hr_error = str(e)
+        logger.error(f"HR panel generation error: {e}", exc_info=True)
 
     return {
-        "status" : "partial" if (ats_error or hr_error) else "success",
-        "ats_result" : ats_result,
-        "hr_panel" : hr_panel,
-        "ats_error" : ats_error,
-        "hr_error" : hr_error,
-        "jd_used" : bool( request.job_description and request.job_description.strip() ),
+        "ats_result": ats_result,
+        "ats_error":  ats_error,
+        "hr_panel":   hr_panel,
+        "hr_error":   hr_error,
     }
 
 
-# ============================================================================
-# PROGRESS STORE (Legacy — kept for backward compatibility)
-# ============================================================================
-
-@app.get( "/progress/dsa" )
-def list_dsa_problems ( topic: Optional[str] = None, difficulty: Optional[str] = None,
-                        solved: Optional[bool] = None ) :
-    problems = progress_store.get_all_dsa()
-    if topic :
-        problems = [p for p in problems if p.get( "topic" ) == topic]
-    if difficulty :
-        problems = [p for p in problems if p.get( "difficulty" ) == difficulty]
-    if solved is not None :
-        problems = [p for p in problems if p.get( "solved" ) == solved]
-    return {"status" : "success", "problems" : problems, "count" : len( problems )}
+class HRPanelRequest(BaseModel):
+    resume_text: str
+    target_role: str = "Software Engineer"
+    company_type: Optional[str] = None
+    focus_area: Optional[str] = None
 
 
-@app.post( "/progress/dsa/add" )
-def add_dsa_problem ( problem: DSAProblem ) :
-    saved = progress_store.upsert_dsa_problem( problem.dict() )
-    return {"status" : "success", "problem" : saved}
-
-
-@app.patch( "/progress/dsa/update" )
-def update_dsa_problem ( update: DSAProgressUpdate ) :
-    result = progress_store.update_dsa_progress(
-        update.problem_id, update.solved, update.attempts, update.notes
-    )
-    if not result :
-        raise HTTPException( status_code=404, detail="Problem not found" )
-    return {"status" : "success", "problem" : result}
-
-
-@app.patch( "/progress/dsa/bulk-update-legacy" )
-def bulk_update_dsa_legacy ( bulk: DSABulkUpdate ) :
-    results = []
-    for u in bulk.updates :
-        r = progress_store.update_dsa_progress( u.problem_id, u.solved, u.attempts, u.notes )
-        if r :
-            results.append( r )
-    return {"status" : "success", "updated" : len( results ), "problems" : results}
-
-
-# ============================================================================
-# TN AUTOMOTIVE
-# ============================================================================
-
-@app.post( "/tn/analyze-profile" )
-def analyze_tn_profile ( request: TNSkillAnalysisRequest ) :
-    extracted = tn_extractor.extract_skills( request.profile_text )
-    result = {"extracted_skills" : extracted, "total_skills_found" : len( extracted ),
-              "nsqf_summary" : _build_nsqf_summary( extracted ), "role_analysis" : None}
-    if request.target_role :
-        result["role_analysis"] = tn_extractor.get_skill_gaps_for_role( extracted, request.target_role )
-    return result
-
-
-@app.post( "/tn/batch-analytics" )
-def batch_analytics ( request: BatchAnalysisRequest ) :
-    if not request.profiles :
-        raise HTTPException( status_code=400, detail="No profiles provided" )
-    if len( request.profiles ) > 500 :
-        raise HTTPException( status_code=400, detail="Maximum 500 profiles per batch" )
-    logger.info( f"Batch analytics: {len( request.profiles )} profiles — '{request.institution_name}'" )
-    analytics = tn_extractor.batch_analyze( [p.dict() for p in request.profiles] )
-    return {"institution" : request.institution_name, "status" : "success", **analytics}
-
-
-@app.get( "/tn/roles" )
-def list_tn_roles () :
-    return {"roles" : [
-        {"role" : name, "description" : d["description"], "cluster" : d["cluster"],
-         "nsqf_target" : d["nsqf_target"],
-         "nsqf_target_label" : NSQF_LEVELS[d["nsqf_target"]]["label"],
-         "required_skills" : d["required_skills"], "preferred_skills" : d["preferred_skills"],
-         "typical_employers" : d["typical_employer"]}
-        for name, d in tn_extractor.job_roles.items()
-    ]}
-
-
-@app.get( "/tn/skills" )
-def list_tn_skills () :
-    return {"total_skills" : len( TN_SKILL_DB ), "skills" : [
-        {"skill" : s["skill"], "category" : s["category"], "sector" : s["sector"],
-         "nsqf_level" : s["nsqf_level"], "nsqf_label" : NSQF_LEVELS[s["nsqf_level"]]["label"],
-         "training_sources" : s["training_src"]}
-        for s in TN_SKILL_DB
-    ], "nsqf_levels" : NSQF_LEVELS}
-
-
-# ============================================================================
-# MENTOR ENDPOINTS
-# ============================================================================
-
-@app.get( "/mentors/search" )
-def search_mentors (
-        expertise: Optional[str] = None,
-        industry: Optional[str] = None,
-        language: Optional[str] = None,
-        max_rate: Optional[float] = None,
-        min_rating: float = 4.0,
-        country: Optional[str] = None,
-        available_now: bool = False
-) :
-    try :
-        expertise_list = expertise.split( "," ) if expertise else None
-        mentors = get_mentor_service().search_mentors(
-            expertise=expertise_list, industry=industry, language=language,
-            max_rate=max_rate, min_rating=min_rating, country=country,
-            available_now=available_now
+@app.post("/interview/hr-panel")
+async def hr_panel_endpoint(request: HRPanelRequest):
+    """Generate a full HR recruiter panel for a resume + target role."""
+    try:
+        panel = _generate_hr_panel(
+            resume_text=request.resume_text,
+            target_role=request.target_role,
+            company_type=request.company_type,
+            focus_area=request.focus_area,
+            num_questions=10,
         )
-        return {"status" : "success", "count" : len( mentors ), "mentors" : mentors}
-    except Exception as e :
-        raise HTTPException( status_code=500, detail=str( e ) )
+        return {"panel": panel}
+    except Exception as e:
+        logger.error(f"HR panel error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post( "/mentors/search" )
-def search_mentors_post ( request: MentorSearchRequest ) :
-    try :
-        mentors = get_mentor_service().search_mentors(
-            expertise=request.expertise, industry=request.industry,
-            language=request.language, max_rate=request.max_rate,
-            min_rating=request.min_rating, country=request.country,
-            available_now=request.available_now
+# ─────────────────────────────────────────────────────────────────────────────
+# TN ANALYTICS  (/tn/batch-analytics)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TNBatchAnalyticsRequest(BaseModel):
+    institution_name: Optional[str] = None
+    profiles: List[Dict]
+
+
+@app.post("/tn/batch-analytics")
+async def tn_batch_analytics(request: TNBatchAnalyticsRequest):
+    """Run batch skill analytics on a list of student/worker profiles."""
+    try:
+        from backend.services.tn_automotive_taxonomy import TNAutomotiveSkillExtractor
+        taxonomy = TNAutomotiveSkillExtractor()
+        result = taxonomy.batch_analyze(request.profiles)
+        if request.institution_name:
+            result["institution_name"] = request.institution_name
+        return result
+    except Exception as e:
+        logger.error(f"TN batch analytics error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RANKING / LTR PREFERENCE  (/ranking/preference)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class RankingPreferenceBody(BaseModel):
+    user_id: str
+    winner: Dict
+    loser: Dict
+    context: Optional[Dict] = None
+
+
+@app.post("/ranking/preference")
+async def record_ranking_preference(body: RankingPreferenceBody):
+    """Record a pairwise preference signal for the Learning-to-Rank model."""
+    try:
+        from backend.services.learning_to_rank import get_ltr_engine
+        engine = get_ltr_engine()
+        result = engine.record_preference(
+            user_id=body.user_id,
+            winner=body.winner,
+            loser=body.loser,
+            context=body.context,
         )
-        return {"status" : "success", "count" : len( mentors ), "mentors" : mentors}
-    except Exception as e :
-        raise HTTPException( status_code=500, detail=str( e ) )
+        return result
+    except Exception as e:
+        logger.error(f"Ranking preference error: {e}", exc_info=True)
+        # Non-critical — return 200 so the UI doesn't surface an error
+        return {"status": "skipped", "reason": str(e)}
 
 
-@app.get( "/mentors/{mentor_id}" )
-def get_mentor ( mentor_id: str ) :
-    mentor = get_mentor_service().get_mentor_by_id( mentor_id )
-    if not mentor :
-        raise HTTPException( status_code=404, detail="Mentor not found" )
-    reviews = get_mentor_service().get_mentor_reviews( mentor_id )
-    return {"status" : "success", "mentor" : {**mentor, "reviews" : reviews}}
+# ─────────────────────────────────────────────────────────────────────────────
+# MENTOR DOMAINS  (/mentor/domains)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/mentor/domains")
+async def mentor_domains():
+    """Return the list of available mentor expertise domains."""
+    try:
+        from backend.services.mentor_service import get_mentor_service
+        svc = get_mentor_service()
+        if hasattr(svc, "get_domains"):
+            return {"domains": svc.get_domains()}
+        # Fallback: derive from mentor data
+        mentors = svc.search_mentors()
+        domains = sorted({d for m in mentors for d in (m.get("expertise") or [])})
+        return {"domains": domains}
+    except Exception as e:
+        logger.error(f"Mentor domains error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get( "/mentors/{mentor_id}/slots" )
-def get_mentor_slots ( mentor_id: str, date: str ) :
-    slots = get_mentor_service().get_available_slots( mentor_id, date )
-    return {"status" : "success", "date" : date, "available_slots" : slots}
+# ─────────────────────────────────────────────────────────────────────────────
+# MAIN ENTRY POINT
+# ─────────────────────────────────────────────────────────────────────────────
 
-
-@app.post( "/mentors/book" )
-def book_session ( request: BookSessionRequest ) :
-    try :
-        session = get_mentor_service().book_session(
-            user_id=request.user_id, mentor_id=request.mentor_id,
-            session_date=request.session_date, session_time=request.session_time,
-            duration_hours=request.duration_hours, topic=request.topic, notes=request.notes
-        )
-        if "error" in session :
-            raise HTTPException( status_code=400, detail=session["error"] )
-        return {"status" : "success", "session" : session}
-    except HTTPException :
-        raise
-    except Exception as e :
-        raise HTTPException( status_code=500, detail=str( e ) )
-
-
-@app.get( "/mentors/sessions/{user_id}" )
-def get_user_sessions ( user_id: str ) :
-    sessions = get_mentor_service().get_user_sessions( user_id )
-    return {"status" : "success", "count" : len( sessions ), "sessions" : sessions}
-
-
-@app.post( "/mentors/sessions/{session_id}/cancel" )
-def cancel_session ( session_id: str, user_id: str ) :
-    result = get_mentor_service().cancel_session( session_id, user_id )
-    if "error" in result :
-        raise HTTPException( status_code=400, detail=result["error"] )
-    return {"status" : "success", "session" : result["session"]}
-
-
-@app.post( "/mentors/sessions/feedback" )
-def session_feedback ( request: SessionFeedbackRequest ) :
-    result = get_mentor_service().complete_session(
-        session_id=request.session_id, user_id=request.user_id,
-        rating=request.rating, feedback=request.feedback
-    )
-    if "error" in result :
-        raise HTTPException( status_code=400, detail=result["error"] )
-    return {"status" : "success", "session" : result["session"]}
-
-
-@app.get( "/mentors/industries" )
-def get_industries () :
-    service = get_mentor_service()
-    industries = set()
-    for mentor in service.mentors :
-        industries.update( mentor['industries'] )
-    return {"status" : "success", "industries" : sorted( list( industries ) )}
-
-
-@app.get( "/mentors/languages" )
-def get_languages () :
-    service = get_mentor_service()
-    languages = set()
-    for mentor in service.mentors :
-        languages.update( mentor['languages_spoken'] )
-    return {"status" : "success", "languages" : sorted( list( languages ) )}
-
-
-# ============================================================================
-# STATS & HEALTH
-# ============================================================================
-
-@app.get( "/rag/stats" )
-def get_stats () :
-    return vector_store.get_stats()
-
-
-@app.get( "/health" )
-def health_check () :
-    errors = settings.validate()
-
-    # Check new services
-    try :
-        fe_ok = bool( get_feedback_engine() )
-    except Exception :
-        fe_ok = False
-        errors.append( "feedback_engine: failed to initialize" )
-
-    try :
-        ltr_ok = bool( get_ltr_engine() )
-    except Exception :
-        ltr_ok = False
-        errors.append( "learning_to_rank: failed to initialize" )
-
-    return {
-        "status" : "healthy" if not errors else "degraded",
-        "errors" : errors,
-        "vector_db_jobs" : vector_store.collection.count(),
-        "vector_db_freshness" : vector_store.get_stats().get( "freshness", "unknown" ),
-        "services" : {
-            "vector_store" : "ok",
-            "job_scraper" : "ok" if settings.SERPAPI_KEY else "missing_api_key",
-            "career_advisor" : "ok" if career_advisor else "not_initialized",
-            "groq_llm" : "ok" if settings.GROQ_API_KEY else "missing_api_key",
-            "anthropic_llm" : "ok" if settings.ANTHROPIC_API_KEY else "missing_api_key",
-            "gemini_llm" : "ok (tertiary)" if settings.GEMINI_API_KEY else "not configured (optional)",
-            "job_coach" : "ok" if (settings.GROQ_API_KEY or settings.ANTHROPIC_API_KEY) else "missing_api_key",
-            "market_insights" : "ok" if (settings.GROQ_API_KEY or settings.ANTHROPIC_API_KEY) else "missing_api_key",
-            "interview_coach" : "ok" if (settings.GROQ_API_KEY or settings.ANTHROPIC_API_KEY) else "missing_api_key",
-            "progress_tracker" : "ok",
-            "resume_rewriter" : "ok" if resume_rewriter else "not_initialized",
-            "tn_automotive_taxonomy" : f"ok — {len( tn_extractor.skill_db )} skills",
-            "feedback_engine" : "ok" if fe_ok else "failed",
-            "learning_to_rank" : "ok" if ltr_ok else "failed",
-            "agent_orchestrator" : "ok" if (settings.GROQ_API_KEY or settings.ANTHROPIC_API_KEY) else "missing_api_key",
-            "agent_debate" : "ok" if (settings.GROQ_API_KEY or settings.ANTHROPIC_API_KEY) else "missing_api_key",
-        }
-    }
-
-
-# ============================================================================
-# GOD-MODE /ask  — Full async multi-agent pipeline
-# ============================================================================
-
-class AskRequest( BaseModel ) :
-    query: str
-    session_id: str = "default"
-    resume_text: Optional[str] = None
-    target_role: Optional[str] = None
-    location: str = "India"
-
-
-@app.post( "/ask" )
-async def ask ( request: AskRequest ) :
-    import asyncio as _asyncio
-
-    try :
-        from backend.services.llm import llm_call, llm_call_smart
-        from backend.services.state_manager import state
-        from backend.services.scoring import weighted_vote, score_responses
-        from backend.services.confidence import estimate_confidence
-        from backend.services.consistency import check_consistency
-        from backend.services.retriever import retrieve_context
-        from backend.services.job_tool import get_job_summary
-        from backend.services.skill_tool import extract_skills_fast
-    except ImportError as e :
-        logger.error( f"/ask import error: {e}" )
-        raise HTTPException( status_code=500, detail=f"Module import failed: {e}" )
-
-    query = request.query.strip()
-    session_id = request.session_id
-    resume = request.resume_text or state.resume( session_id )
-    role = request.target_role or state.target_role( session_id ) or "Software Engineer"
-
-    if not query :
-        raise HTTPException( status_code=400, detail="query is required" )
-
-    # Session state
-    session = state.get( session_id )
-    if resume :
-        state.set_resume( session_id, resume, role )
-
-    history_ctx = ""
-    recent = state.history( session_id, last_n=3 )
-    if recent :
-        history_ctx = "Recent conversation:\n" + "\n".join(
-            f"Q: {h['query']}\nA: {h['final'][:120]}…" for h in recent
-        )
-
-    # RAG retrieval
-    rag_context = retrieve_context( query, top_k=3 )
-
-    # Tool calls (parallel)
-    loop = _asyncio.get_event_loop()
-
-    def _jobs_tool () :
-        return get_job_summary( role, location=request.location, top_n=3 )
-
-    def _skills_tool () :
-        if not resume :
-            return ""
-        skills = extract_skills_fast( resume )
-        return f"Candidate skills: {', '.join( skills[:12] )}" if skills else ""
-
-    jobs_ctx, skills_ctx = await _asyncio.gather(
-        loop.run_in_executor( None, _jobs_tool ),
-        loop.run_in_executor( None, _skills_tool ),
-    )
-
-    # Build shared context block
-    context_block = "\n\n".join( filter( None, [
-        rag_context,
-        jobs_ctx,
-        skills_ctx,
-        history_ctx,
-    ] ) )
-
-    # Parallel proposer agents
-    PROPOSERS = {
-        "Optimist" : "You maximise opportunity and growth. Be ambitious but grounded.",
-        "Realist" : "You focus on feasibility, market realities, and practical constraints.",
-        "Market" : "You specialise in hiring trends, salary data, and in-demand skills.",
-    }
-
-    async def _propose ( agent_name: str, agent_role: str ) -> Tuple[str, str] :
-        system = (
-            f"You are a career advisor. Role: {agent_role}\n"
-            f"Target role being considered: {role}\n"
-            "Think step-by-step and give a specific, actionable answer."
-        )
-        user = (
-            f"Context:\n{context_block}\n\n"
-            f"Question: {query}"
-        )
-        response = await llm_call( system, user, temp=0.7 )
-        return agent_name, response
-
-    proposal_tasks = [_propose( name, role_desc ) for name, role_desc in PROPOSERS.items()]
-    proposal_pairs = await _asyncio.gather( *proposal_tasks )
-    responses: Dict[str, str] = {name : resp for name, resp in proposal_pairs}
-
-    logger.info( f"[/ask] {len( responses )} proposer responses collected" )
-
-    # Critic agent
-    responses_text = "\n\n".join( f"[{k}]:\n{v}" for k, v in responses.items() )
-    critique = await llm_call(
-        system="You are a harsh, precise critic. Identify the weakest claims, "
-               "unsupported assumptions, and missing specifics in these responses.",
-        user=f"Original question: {query}\n\nResponses:\n{responses_text}",
-        temp=0.3,
-    )
-
-    # Voting + scoring
-    scores, winner = weighted_vote( query, responses )
-    logger.info( f"[/ask] Scores: {scores} | Winner: {winner}" )
-
-    # Synthesizer
-    final_answer = await llm_call_smart(
-        system="You are an expert synthesiser. Combine the best elements of multiple "
-               "expert responses into one clear, actionable, specific answer. "
-               "Address the critique's concerns. Do not repeat weaknesses.",
-        user=(
-            f"Original question: {query}\n\n"
-            f"Expert responses:\n{responses_text}\n\n"
-            f"Critic's analysis:\n{critique}\n\n"
-            f"Agent relevance scores: {scores}\n\n"
-            f"Produce the definitive best answer:"
-        ),
-        temp=0.5,
-        max_tokens=1500,
-    )
-
-    # Confidence estimation
-    confidence_report = estimate_confidence( scores, final_answer )
-
-    # Self-consistency check
-    consistency_report = check_consistency( responses )
-
-    # Session memory update
-    state.update( session_id, {
-        "query" : query,
-        "final" : final_answer,
-        "confidence" : confidence_report["score"],
-        "winner_agent" : winner,
-    } )
-
-    return {
-        "status" : "success",
-        "final" : final_answer,
-        "responses" : responses,
-        "critique" : critique,
-        "scores" : scores,
-        "winner" : winner,
-        "confidence" : confidence_report,
-        "consistency" : consistency_report,
-        "session" : {
-            "id" : session_id,
-            "history_count" : len( session.get( "history", [] ) ),
-        },
-        "context_sources" : {
-            "rag_docs_retrieved" : bool( rag_context ),
-            "jobs_retrieved" : bool( jobs_ctx ),
-            "skills_extracted" : bool( skills_ctx ),
-        },
-    }
-
-
-@app.get( "/session/{session_id}" )
-def get_session ( session_id: str ) :
-    try :
-        from backend.services.state_manager import state
-        return {"status" : "success", "session" : state.snapshot( session_id )}
-    except Exception as e :
-        raise HTTPException( status_code=500, detail=str( e ) )
-
-
-@app.delete( "/session/{session_id}" )
-def clear_session ( session_id: str ) :
-    try :
-        from backend.services.state_manager import state
-        state.drop( session_id )
-        return {"status" : "success", "message" : f"Session {session_id} cleared."}
-    except Exception as e :
-        raise HTTPException( status_code=500, detail=str( e ) )
-
-
-def _build_nsqf_summary ( extracted_skills: List[Dict] ) -> Dict :
-    if not extracted_skills :
-        return {"peak_level" : 1, "peak_label" : NSQF_LEVELS[1]["label"], "distribution" : {}}
-    dist: Dict[int, List] = {}
-    for s in extracted_skills :
-        dist.setdefault( s["nsqf_level"], [] ).append( s["skill"] )
-    peak = max( dist.keys() )
-    return {"peak_level" : peak, "peak_label" : NSQF_LEVELS[peak]["label"],
-            "distribution" : {NSQF_LEVELS[lvl]["label"] : skills for lvl, skills in sorted( dist.items() )}}
-
-if __name__ == "__main__" :
+if __name__ == "__main__":
     import uvicorn
-
-    uvicorn.run( "backend.main:app", host="0.0.0.0", port=8000, reload=True )
+    uvicorn.run(
+        "backend.main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True,
+        log_level="info",
+    )

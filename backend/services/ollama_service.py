@@ -4,7 +4,7 @@ Optimized for speed:
   - Persistent requests.Session (connection pooling / keep-alive)
   - Concurrent batch embeddings via ThreadPoolExecutor
   - Streaming chat with configurable timeout
-  - Tighter timeouts so slow calls fail-fast to cloud fallback
+  - Graceful fallback when embedding fails
 """
 import logging
 import concurrent.futures
@@ -28,13 +28,13 @@ class OllamaService:
     def __init__(
         self,
         host: str = "http://localhost:11434",
-        embedding_model: str = "all-minilm",
+        embedding_model: str = "all-minilm",  # Use existing model that works with ChromaDB
         llm_model: str = "llama3.2:3b",
     ):
         self.host            = host
         self.embedding_model = embedding_model
         self.llm_model       = llm_model
-        self._dimension      = 384
+        self._dimension      = 384  # all-minilm → 384-dim vectors (matches existing ChromaDB)
 
         # ── Persistent session with keep-alive and reasonable pool size ──────
         self._session = requests.Session()
@@ -48,10 +48,13 @@ class OllamaService:
 
         self.available = self._check_availability()
 
+        # Check if embedding model is available
+        self._embedding_available = self._check_embedding_model()
+
         if self.available:
             logger.info(
                 f"OllamaService ready — embedding={embedding_model}, "
-                f"llm={llm_model}, host={host}"
+                f"llm={llm_model}, host={host}, embedding_available={self._embedding_available}"
             )
         else:
             logger.warning(f"Ollama not available at {host}. Run 'ollama serve' first.")
@@ -69,10 +72,33 @@ class OllamaService:
             logger.debug(f"Ollama check failed: {e}")
         return False
 
+    def _check_embedding_model(self) -> bool:
+        """Check if the embedding model is available in Ollama."""
+        if not self.available:
+            return False
+        try:
+            r = self._session.get(f"{self.host}/api/tags", timeout=_HEALTH_TIMEOUT)
+            if r.status_code == 200:
+                models = r.json().get("models", [])
+                model_names = [m.get("name", "") for m in models]
+                if any(self.embedding_model in n for n in model_names):
+                    return True
+                else:
+                    logger.warning(
+                        f"Embedding model '{self.embedding_model}' not found. "
+                        f"Run: ollama pull {self.embedding_model}"
+                    )
+        except Exception as e:
+            logger.warning(f"Failed to check embedding model: {e}")
+        return False
+
     # ── Embeddings ────────────────────────────────────────────────────────────
 
     def _embed_one(self, text: str) -> List[float]:
         """Embed a single text — called from the thread pool."""
+        if not self._embedding_available:
+            return [0.0] * self._dimension
+
         try:
             r = self._session.post(
                 f"{self.host}/api/embeddings",
@@ -80,8 +106,22 @@ class OllamaService:
                 timeout=_EMBED_TIMEOUT,
             )
             if r.status_code == 200:
-                return r.json().get("embedding", [0.0] * self._dimension)
-            logger.error(f"Ollama embedding HTTP {r.status_code}")
+                embedding = r.json().get("embedding", [0.0] * self._dimension)
+                # Ensure correct dimension
+                if len(embedding) != self._dimension:
+                    logger.warning(f"Embedding dimension mismatch: expected {self._dimension}, got {len(embedding)}")
+                    if len(embedding) > self._dimension:
+                        embedding = embedding[:self._dimension]
+                    else:
+                        embedding = embedding + [0.0] * (self._dimension - len(embedding))
+                return embedding
+            elif r.status_code == 500:
+                logger.warning(f"Ollama embedding HTTP 500 - model '{self.embedding_model}' may not exist")
+                return [0.0] * self._dimension
+            else:
+                logger.error(f"Ollama embedding HTTP {r.status_code}")
+        except requests.exceptions.Timeout:
+            logger.error(f"Ollama embedding timeout for text length {len(text)}")
         except Exception as e:
             logger.error(f"Ollama embedding error: {e}")
         return [0.0] * self._dimension
@@ -89,11 +129,11 @@ class OllamaService:
     def get_embeddings(self, texts: List[str]) -> np.ndarray:
         """
         Embed a batch of texts **concurrently** using a thread pool.
-        Previously this was a serial loop — now N texts take ~1× latency
-        instead of N× latency.
+        Returns zero vectors if embedding fails (graceful degradation).
         """
-        if not self.available:
-            raise RuntimeError("Ollama not available. Run 'ollama serve'")
+        if not self.available or not self._embedding_available:
+            logger.debug(f"Ollama embeddings unavailable, returning zero vectors for {len(texts)} texts")
+            return np.zeros((len(texts), self._dimension))
 
         if not texts:
             return np.empty((0, self._dimension))
@@ -106,8 +146,8 @@ class OllamaService:
 
     def get_embedding(self, text: str) -> List[float]:
         """Embed a single text (convenience wrapper)."""
-        if not self.available:
-            raise RuntimeError("Ollama not available")
+        if not self.available or not self._embedding_available:
+            return [0.0] * self._dimension
         return self._embed_one(text)
 
     # ── Chat ──────────────────────────────────────────────────────────────────
@@ -121,10 +161,6 @@ class OllamaService:
     ) -> str:
         """
         Generate a chat completion.
-
-        stream=False (default): wait for full response, timeout=_CHAT_TIMEOUT.
-        stream=True           : collect streamed chunks — slightly lower TTFB
-                                but same total time; useful if you pipe output.
         """
         if not self.available:
             raise RuntimeError("Ollama not available. Run 'ollama serve'")
@@ -136,7 +172,6 @@ class OllamaService:
             "options": {
                 "temperature": temperature,
                 "num_predict": max_tokens,
-                # Keep context small for speed on 3 B models
                 "num_ctx": 2048,
             },
         }
@@ -152,17 +187,13 @@ class OllamaService:
                 )
                 if r.status_code == 200:
                     content = r.json().get("message", {}).get("content", "").strip()
-                    logger.info(
-                        f"[ollama] ✅ {self.llm_model} → {len(content)} chars"
-                    )
+                    logger.info(f"[ollama] ✅ {self.llm_model} → {len(content)} chars")
                     return content
                 logger.error(f"Ollama chat HTTP {r.status_code}: {r.text[:200]}")
                 raise RuntimeError(f"Ollama returned {r.status_code}")
 
         except requests.exceptions.Timeout:
-            logger.warning(
-                f"[ollama] ⏰ {self.llm_model} timed out after {_CHAT_TIMEOUT}s"
-            )
+            logger.warning(f"[ollama] ⏰ {self.llm_model} timed out after {_CHAT_TIMEOUT}s")
             raise RuntimeError("Ollama chat timed out")
         except requests.exceptions.ConnectionError:
             logger.error("Cannot connect to Ollama — is 'ollama serve' running?")

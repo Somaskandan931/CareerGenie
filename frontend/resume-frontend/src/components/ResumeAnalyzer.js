@@ -320,13 +320,66 @@ const ATSResults = ({ result }) => (
 // HR RECRUITER RESULTS PANEL
 // ─────────────────────────────────────────────────────────────────────────────
 
-const HRResults = ({ panel, companyType, focusArea, setCompanyType, setFocusArea, onRun, loading }) => {
+// Normalise whatever the backend returns into the exact shape HRResults needs.
+// Guards against missing keys, wrong types, or partial responses.
+const normalisePanel = (raw) => {
+  if (!raw || typeof raw !== "object") return null;
+
+  const validVerdicts = new Set(["Strong Yes", "Yes", "Maybe", "No", "Strong No"]);
+
+  const dimRaw = raw.dimension_scores && typeof raw.dimension_scores === "object"
+    ? raw.dimension_scores : {};
+  const dimension_scores = {
+    technical_fit:         Number(dimRaw.technical_fit)         || 5,
+    experience_relevance:  Number(dimRaw.experience_relevance)  || 5,
+    culture_fit:           Number(dimRaw.culture_fit)           || 5,
+    growth_potential:      Number(dimRaw.growth_potential)      || 5,
+    communication_clarity: Number(dimRaw.communication_clarity) || 5,
+  };
+
+  const normaliseQ = (q) => {
+    if (typeof q === "string") return { question: q, type: "behavioural", reason: "" };
+    if (q && typeof q === "object" && q.question)
+      return { question: String(q.question), type: q.type || "behavioural", reason: q.reason || "" };
+    return null;
+  };
+
+  return {
+    hire_verdict:               validVerdicts.has(raw.hire_verdict) ? raw.hire_verdict : "Maybe",
+    verdict_summary:            raw.verdict_summary    || "Resume reviewed by AI recruiter.",
+    verdict_confidence:         Number(raw.verdict_confidence) || 60,
+    dimension_scores,
+    green_flags:                Array.isArray(raw.green_flags)  ? raw.green_flags  : [],
+    red_flags:                  Array.isArray(raw.red_flags)    ? raw.red_flags    : [],
+    questions_to_ask:           Array.isArray(raw.questions_to_ask)
+                                  ? raw.questions_to_ask.map(normaliseQ).filter(Boolean) : [],
+    salary_bracket_inr:         raw.salary_bracket_inr         || null,
+    suggested_interview_rounds: Array.isArray(raw.suggested_interview_rounds)
+                                  ? raw.suggested_interview_rounds : [],
+    recruiter_notes:            raw.recruiter_notes            || null,
+  };
+};
+
+const HRResults = ({ panel: rawPanel, companyType, focusArea, setCompanyType, setFocusArea, onRun, loading }) => {
+  const panel    = normalisePanel(rawPanel);
   const verdict  = panel?.hire_verdict;
   const vStyle   = VERDICT_CONFIG[verdict] || VERDICT_CONFIG["Maybe"];
   const avgScore = panel
-    ? (Object.values(panel.dimension_scores || {}).reduce((a, v) => a + v, 0) /
-       Math.max(Object.keys(panel.dimension_scores || {}).length, 1)).toFixed(1)
+    ? (Object.values(panel.dimension_scores).reduce((a, v) => a + v, 0) /
+       Math.max(Object.keys(panel.dimension_scores).length, 1)).toFixed(1)
     : null;
+
+  // Safety net — if normalisation still yields nothing renderable, show a helpful message
+  if (!panel) return (
+    <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-xl p-6 text-center">
+      <p className="text-sm text-amber-700 dark:text-amber-300 font-medium mb-1">HR panel data unavailable</p>
+      <p className="text-xs text-amber-600 dark:text-amber-400">The recruiter analysis returned an unexpected response. Try re-running.</p>
+      <button onClick={onRun} disabled={loading}
+        className="mt-3 bg-violet-600 hover:bg-violet-700 text-white text-xs font-medium px-4 py-2 rounded-lg disabled:opacity-40 transition-colors">
+        {loading ? "Running…" : "Re-run Recruiter"}
+      </button>
+    </div>
+  );
 
   return (
     <div className="space-y-6 pt-2">
@@ -620,7 +673,9 @@ export default function ResumeAnalyzer({ resumeText }) {
       if (data.hr_panel) { setHrPanel(data.hr_panel); }
       else if (data.hr_error) { setHrError(data.hr_error); }
 
-      setActiveResult("ats");
+      // Switch to whichever result is available
+      if (data.ats_result) setActiveResult("ats");
+      else if (data.hr_panel) setActiveResult("hr");
     } catch (e) {
       setAtsError(e.message);
       setHrError(e.message);
@@ -649,11 +704,17 @@ export default function ResumeAnalyzer({ resumeText }) {
           </div>
         </div>
 
-        {/* Shared errors */}
-        {(atsError || hrError) && (
+        {/* Per-tab errors */}
+        {atsError && (
+          <div className="flex items-start gap-2 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-700 rounded-lg p-3 mb-3">
+            <Icon d={ICONS.alert} size="h-4 w-4" className="text-red-500 flex-shrink-0 mt-0.5" />
+            <p className="text-sm text-red-700 dark:text-red-300"><span className="font-semibold">ATS Error:</span> {atsError}</p>
+          </div>
+        )}
+        {hrError && (
           <div className="flex items-start gap-2 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-700 rounded-lg p-3 mb-4">
             <Icon d={ICONS.alert} size="h-4 w-4" className="text-red-500 flex-shrink-0 mt-0.5" />
-            <p className="text-sm text-red-700 dark:text-red-300">{atsError || hrError}</p>
+            <p className="text-sm text-red-700 dark:text-red-300"><span className="font-semibold">HR Error:</span> {hrError}</p>
           </div>
         )}
 

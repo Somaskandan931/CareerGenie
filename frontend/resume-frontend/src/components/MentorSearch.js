@@ -1,466 +1,284 @@
-"""
-services/llm.py  —  Centralised multi-provider LLM caller
-==========================================================
-Provider waterfall:  Ollama (primary/local) → Groq → Anthropic → Gemini
-
-All services import from here — never call any SDK directly.
-
-Public API
-----------
-Sync  : llm_call_sync(system, user, *, temp, max_tokens) -> str
-        llm_call_smart_sync(...)   higher token budget
-        llm_json(...)              returns parsed dict/list
-Async : llm_call(...)  /  llm_call_smart(...)
-
-Speed optimisations vs original
----------------------------------
-• Ollama chat timeout reduced to 45 s (was 60 s buried in OllamaService)
-• llm_call_smart_sync default max_tokens reduced 2048→1536 for 3 B models
-• _call_ollama propagates RuntimeError immediately so the waterfall
-  moves to Groq fast instead of waiting on a dead connection
-• Async path uses asyncio.to_thread (Python 3.9+) instead of
-  loop.run_in_executor(None, ...) — cleaner and slightly lower overhead
-• Groq/Anthropic/Gemini clients still initialised lazily (no change)
-"""
-
-from __future__ import annotations
-
-import asyncio
-import json
-import logging
-import re
-import time
-from typing import Any
-
-logger = logging.getLogger(__name__)
-
-
-# =============================================================================
-# Provider clients  (lazy-initialised)
-# =============================================================================
-
-_ollama_service   = None
-_groq_client      = None
-_anthropic_client = None
-_gemini_client    = None
-_genai_module     = None
-
-
-def _get_ollama():
-    global _ollama_service
-    if _ollama_service is not None:
-        return _ollama_service
-    try:
-        from backend.services.ollama_service import get_ollama_service
-        _ollama_service = get_ollama_service()
-        if _ollama_service and _ollama_service.available:
-            logger.info("[llm] ✅ Ollama service initialised (local primary)")
-        else:
-            logger.warning("[llm] ⚠️ Ollama service not available")
-        return _ollama_service
-    except Exception as e:
-        logger.warning(f"[llm] ❌ Ollama not available: {e}")
-        return None
-
-
-def _get_groq():
-    global _groq_client
-    if _groq_client is not None:
-        return _groq_client
-    from backend.config import settings
-    if not settings.GROQ_API_KEY:
-        return None
-    try:
-        from groq import Groq
-        import httpx
-        http_client = httpx.Client(
-            timeout=httpx.Timeout(60.0, connect=10.0),
-            follow_redirects=True,
-            proxies=None,
-        )
-        _groq_client = Groq(
-            api_key=settings.GROQ_API_KEY,
-            http_client=http_client,
-            max_retries=0,
-        )
-        logger.info("[llm] ✅ Groq client initialised (cloud fallback)")
-        return _groq_client
-    except ImportError:
-        logger.warning("[llm] ❌ groq package not installed")
-        return None
-    except Exception as e:
-        logger.warning(f"[llm] ❌ Groq init error: {e}")
-        return None
-
-
-def _get_anthropic():
-    global _anthropic_client
-    if _anthropic_client is not None:
-        return _anthropic_client
-    from backend.config import settings
-    if not settings.ANTHROPIC_API_KEY:
-        return None
-    try:
-        import anthropic, httpx
-        http_client = httpx.Client(
-            timeout=httpx.Timeout(60.0, connect=10.0),
-            follow_redirects=True,
-            proxies=None,
-        )
-        _anthropic_client = anthropic.Anthropic(
-            api_key=settings.ANTHROPIC_API_KEY,
-            http_client=http_client,
-            max_retries=0,
-        )
-        logger.info("[llm] ✅ Anthropic client initialised (cloud fallback)")
-        return _anthropic_client
-    except ImportError:
-        logger.warning("[llm] ❌ anthropic package not installed")
-        return None
-    except Exception as e:
-        logger.warning(f"[llm] ❌ Anthropic init error: {e}")
-        return None
-
-
-def _get_gemini():
-    global _gemini_client, _genai_module
-    if _gemini_client is not None:
-        return _gemini_client, _genai_module
-    from backend.config import settings
-    if not settings.GEMINI_API_KEY:
-        return None, None
-    try:
-        from google import genai as _g
-        _genai_module = _g
-        _gemini_client = _g.Client(
-            api_key=settings.GEMINI_API_KEY,
-            http_options={"api_version": "v1"},
-        )
-        logger.info("[llm] ✅ Gemini client initialised (tertiary fallback)")
-        return _gemini_client, _genai_module
-    except ImportError:
-        logger.warning("[llm] ❌ google-genai package not installed")
-        return None, None
-    except Exception as e:
-        logger.warning(f"[llm] ❌ Gemini init error: {e}")
-        return None, None
-
-
-# =============================================================================
-# Error helpers
-# =============================================================================
-
-def _parse_retry_after(exc: Exception) -> float:
-    text = str(exc)
-    m = re.search(r'retry[^0-9]{0,20}(\d+(?:\.\d+)?)\s*s', text, re.IGNORECASE)
-    if m:
-        return min(float(m.group(1)), 60.0)
-    m = re.search(r'(\d+(?:\.\d+)?)\s*s', text)
-    if m:
-        return min(float(m.group(1)), 60.0)
-    return 5.0
-
-
-def _is_groq_ratelimit(exc: Exception) -> bool:
-    msg = str(exc).lower()
-    return any(k in msg for k in ("429", "rate_limit", "ratelimit", "rate limit"))
-
-
-def _is_groq_unavailable(exc: Exception) -> bool:
-    msg = str(exc).lower()
-    return any(k in msg for k in ("503", "502", "unavailable", "overloaded"))
-
-
-def _is_anthropic_overload(exc: Exception) -> bool:
-    msg = str(exc).lower()
-    return any(k in msg for k in ("529", "overloaded", "503", "unavailable"))
-
-
-def _is_quota_exhausted(exc: Exception) -> bool:
-    msg = str(exc).lower()
-    return any(k in msg for k in ("quota", "resource_exhausted", "resourceexhausted", "limit: 0"))
-
-
-# =============================================================================
-# Individual provider callers
-# =============================================================================
-
-_MAX_RETRIES = 2
-
-
-def _call_ollama(system: str, user: str, *, temp: float, max_tokens: int) -> str:
-    """
-    Call Ollama local LLM.
-    Cap max_tokens at 1024 for the 3 B model — larger budgets slow it
-    considerably and rarely improve quality for structured outputs.
-    """
-    svc = _get_ollama()
-    if not svc or not svc.available:
-        raise RuntimeError("Ollama service not available. Run 'ollama serve'")
-
-    # Protect against callers requesting huge outputs from a tiny local model
-    effective_tokens = min(max_tokens, 1024)
-
-    messages = [
-        {"role": "system", "content": system},
-        {"role": "user",   "content": user},
-    ]
-
-    result = svc.chat(messages, temperature=temp, max_tokens=effective_tokens)
-
-    if result and len(result) > 5:
-        logger.info(f"[llm] ✅ Ollama/{svc.llm_model} → {len(result)} chars")
-        return result
-
-    raise RuntimeError("Empty or too-short response from Ollama")
-
-
-def _call_groq(system: str, user: str, *, temp: float, max_tokens: int) -> str:
-    from backend.config import settings
-    client = _get_groq()
-    if not client:
-        raise RuntimeError("Groq not configured")
-
-    models = list(dict.fromkeys([settings.GROQ_CHAT_MODEL] + settings.GROQ_FALLBACK_MODELS))
-
-    for model in models:
-        for attempt in range(_MAX_RETRIES + 1):
-            try:
-                resp = client.chat.completions.create(
-                    model=model,
-                    messages=[
-                        {"role": "system", "content": system},
-                        {"role": "user",   "content": user},
-                    ],
-                    temperature=temp,
-                    max_tokens=max_tokens,
-                )
-                result = resp.choices[0].message.content.strip()
-                logger.info(f"[llm] ✅ Groq/{model} (attempt {attempt + 1})")
-                return result
-
-            except Exception as exc:
-                if _is_groq_ratelimit(exc):
-                    delay = _parse_retry_after(exc)
-                    if attempt < _MAX_RETRIES:
-                        logger.warning(f"[llm] ⏳ Groq/{model} rate-limited, sleeping {delay:.0f}s")
-                        time.sleep(delay)
-                    else:
-                        logger.warning(f"[llm] ⚠️  Groq/{model} rate-limit exhausted → next model")
-                        break
-                elif _is_groq_unavailable(exc):
-                    if attempt < _MAX_RETRIES:
-                        logger.warning(f"[llm] ⏳ Groq/{model} unavailable, retrying in 3s")
-                        time.sleep(3)
-                    else:
-                        logger.warning(f"[llm] ⚠️  Groq/{model} still unavailable → next model")
-                        break
-                else:
-                    logger.error(f"[llm] ❌ Groq/{model} fatal: {exc}")
-                    raise
-
-    raise RuntimeError("All Groq models failed — falling through to Anthropic")
-
-
-def _call_anthropic(system: str, user: str, *, temp: float, max_tokens: int) -> str:
-    from backend.config import settings
-    client = _get_anthropic()
-    if not client:
-        raise RuntimeError("Anthropic not configured")
-
-    models = list(dict.fromkeys(
-        [settings.ANTHROPIC_CHAT_MODEL] + settings.ANTHROPIC_FALLBACK_MODELS
-    ))
-
-    for model in models:
-        for attempt in range(_MAX_RETRIES + 1):
-            try:
-                resp = client.messages.create(
-                    model=model,
-                    max_tokens=max_tokens,
-                    temperature=temp,
-                    system=system,
-                    messages=[{"role": "user", "content": user}],
-                )
-                result = resp.content[0].text.strip()
-                logger.info(f"[llm] ✅ Anthropic/{model} (attempt {attempt + 1})")
-                return result
-
-            except Exception as exc:
-                if _is_anthropic_overload(exc):
-                    delay = _parse_retry_after(exc) if attempt > 0 else 3.0
-                    if attempt < _MAX_RETRIES:
-                        logger.warning(f"[llm] ⏳ Anthropic/{model} overloaded, sleeping {delay:.0f}s")
-                        time.sleep(delay)
-                    else:
-                        logger.warning(f"[llm] ⚠️  Anthropic/{model} still overloaded → next model")
-                        break
-                else:
-                    logger.error(f"[llm] ❌ Anthropic/{model} fatal: {exc}")
-                    raise
-
-    raise RuntimeError("All Anthropic models failed — falling through to Gemini")
-
-
-def _call_gemini(system: str, user: str, *, temp: float, max_tokens: int) -> str:
-    from backend.config import settings
-    client, genai = _get_gemini()
-    if not client or not genai:
-        raise RuntimeError("Gemini not configured")
-
-    models = list(dict.fromkeys(
-        [settings.GEMINI_SMART_MODEL] + settings.GEMINI_FALLBACK_MODELS
-    ))
-
-    for model in models:
-        try:
-            contents = [{"role": "user", "parts": [{"text": f"{system}\n\n{user}"}]}]
-            response = client.models.generate_content(
-                model=model,
-                config=genai.types.GenerateContentConfig(
-                    temperature=temp,
-                    max_output_tokens=max_tokens,
-                ),
-                contents=contents,
-            )
-            logger.info(f"[llm] ✅ Gemini/{model}")
-            return response.text.strip()
-        except Exception as exc:
-            if _is_quota_exhausted(exc):
-                logger.warning(f"[llm] ⚠️  Gemini/{model} quota exhausted → next model")
-                continue
-            logger.error(f"[llm] ❌ Gemini/{model}: {exc}")
-            raise
-
-    raise RuntimeError("All Gemini models quota-exhausted")
-
-
-# =============================================================================
-# Main dispatcher  (Ollama → Groq → Anthropic → Gemini)
-# =============================================================================
-
-def _call_sync(
-    system:     str,
-    user:       str,
-    *,
-    temp:       float = 0.7,
-    max_tokens: int   = 1024,
-) -> str:
-    from backend.config import settings
-
-    # 1. Ollama (local, no rate limits, no internet needed)
-    try:
-        return _call_ollama(system, user, temp=temp, max_tokens=max_tokens)
-    except Exception as e:
-        logger.warning(f"[llm] Ollama failed: {e} → trying Groq")
-
-    # 2. Groq
-    if settings.GROQ_API_KEY:
-        try:
-            return _call_groq(system, user, temp=temp, max_tokens=max_tokens)
-        except RuntimeError as e:
-            logger.warning(f"[llm] Groq exhausted: {e} → trying Anthropic")
-        except Exception as e:
-            logger.warning(f"[llm] Groq error: {e} → trying Anthropic")
-
-    # 3. Anthropic
-    if settings.ANTHROPIC_API_KEY:
-        try:
-            return _call_anthropic(system, user, temp=temp, max_tokens=max_tokens)
-        except RuntimeError as e:
-            logger.warning(f"[llm] Anthropic exhausted: {e} → trying Gemini")
-        except Exception as e:
-            logger.warning(f"[llm] Anthropic error: {e} → trying Gemini")
-
-    # 4. Gemini
-    if settings.GEMINI_API_KEY:
-        try:
-            return _call_gemini(system, user, temp=temp, max_tokens=max_tokens)
-        except Exception as e:
-            logger.warning(f"[llm] Gemini error: {e}")
-
-    raise RuntimeError(
-        "No LLM providers available.\n"
-        "Make sure Ollama is running (recommended) or set at least one API key:\n"
-        "  - Ollama: run 'ollama serve' and 'ollama pull llama3.2:3b'\n"
-        "  - Groq: set GROQ_API_KEY in backend/.env\n"
-        "  - Anthropic: set ANTHROPIC_API_KEY in backend/.env\n"
-        "  - Gemini: set GEMINI_API_KEY in backend/.env"
-    )
-
-
-# =============================================================================
-# Public API — Sync
-# =============================================================================
-
-def llm_call_sync(
-    system: str,
-    user: str,
-    *,
-    temp: float = 0.7,
-    max_tokens: int = 1024,
-) -> str:
-    """Sync LLM call — Ollama → Groq → Anthropic → Gemini."""
-    return _call_sync(system, user, temp=temp, max_tokens=max_tokens)
-
-
-def llm_call_smart_sync(
-    system: str,
-    user: str,
-    *,
-    temp: float = 0.5,
-    # Reduced from 2048 → 1536: llama3.2:3b doesn't benefit from huge
-    # budgets and the extra tokens cost significant extra latency.
-    # Cloud providers will honour the full value if Ollama falls through.
-    max_tokens: int = 1536,
-) -> str:
-    """Higher-token sync call for roadmaps, career advice, debate synthesis."""
-    return _call_sync(system, user, temp=temp, max_tokens=max_tokens)
-
-
-def llm_json(
-    system: str,
-    user: str,
-    *,
-    temp: float = 0.3,
-    max_tokens: int = 2048,
-) -> Any:
-    """
-    Call LLM and return parsed JSON dict/list.
-    Strips markdown fences automatically.
-    Raises json.JSONDecodeError if the model returns non-JSON.
-    """
-    raw = _call_sync(system, user, temp=temp, max_tokens=max_tokens)
-    cleaned = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.MULTILINE)
-    cleaned = re.sub(r"\s*```$", "", cleaned, flags=re.MULTILINE).strip()
-    return json.loads(cleaned)
-
-
-# =============================================================================
-# Public API — Async
-# =============================================================================
-
-async def llm_call(
-    system: str,
-    user: str,
-    *,
-    temp: float = 0.7,
-    max_tokens: int = 1024,
-) -> str:
-    """Async LLM call — Ollama → Groq → Anthropic → Gemini."""
-    return await asyncio.to_thread(
-        _call_sync, system, user, temp=temp, max_tokens=max_tokens
-    )
-
-
-async def llm_call_smart(
-    system: str,
-    user: str,
-    *,
-    temp: float = 0.5,
-    max_tokens: int = 1536,
-) -> str:
-    """Async higher-token call for synthesis / debate."""
-    return await asyncio.to_thread(
-        _call_sync, system, user, temp=temp, max_tokens=max_tokens
-    )
+import React, { useState, useEffect, useCallback } from 'react';
+
+const API_BASE_URL = 'http://localhost:8000';
+
+const MentorSearch = ({ userId, userSkills = [] }) => {
+  const [searchQuery, setSearchQuery] = useState('');
+  const [domain, setDomain] = useState('');
+  const [mentors, setMentors] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [selectedMentor, setSelectedMentor] = useState(null);
+  const [bookingData, setBookingData] = useState({ date: '', time: '', message: '' });
+  const [bookingStatus, setBookingStatus] = useState(null);
+  const [domains, setDomains] = useState([]);
+
+  // Fetch available domains on mount
+  useEffect(() => {
+    fetch(`${API_BASE_URL}/mentor/domains`)
+      .then(res => res.json())
+      .then(data => setDomains(data.domains || []))
+      .catch(() => setDomains(['Technology', 'Business', 'Design', 'Marketing', 'Data Science']));
+  }, []);
+
+  const searchMentors = useCallback(async () => {
+    if (!searchQuery.trim() && !domain) return;
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/mentor/search`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query: searchQuery,
+          domain: domain,
+          user_skills: userSkills,
+          user_id: userId
+        })
+      });
+      const data = await res.json();
+      setMentors(data.mentors || []);
+    } catch (error) {
+      console.error('Error searching mentors:', error);
+      setMentors([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [searchQuery, domain, userSkills, userId]);
+
+  const handleBookSession = async (mentor) => {
+    if (!bookingData.date || !bookingData.time) {
+      setBookingStatus({ error: 'Please select date and time' });
+      return;
+    }
+    setBookingStatus(null);
+    try {
+      const res = await fetch(`${API_BASE_URL}/mentor/book`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mentor_id: mentor.id,
+          user_id: userId,
+          date: bookingData.date,
+          time: bookingData.time,
+          message: bookingData.message,
+          mentor_name: mentor.name,
+          mentor_domain: mentor.domain
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setBookingStatus({ success: `Session booked with ${mentor.name} on ${bookingData.date} at ${bookingData.time}` });
+        setSelectedMentor(null);
+        setBookingData({ date: '', time: '', message: '' });
+      } else {
+        setBookingStatus({ error: data.detail || 'Booking failed' });
+      }
+    } catch (error) {
+      setBookingStatus({ error: 'Network error. Please try again.' });
+    }
+  };
+
+  const getMatchBadge = (score) => {
+    if (score >= 0.8) return { label: 'High Match', color: 'bg-green-100 text-green-700 border-green-200' };
+    if (score >= 0.5) return { label: 'Medium Match', color: 'bg-yellow-100 text-yellow-700 border-yellow-200' };
+    return { label: 'Low Match', color: 'bg-gray-100 text-gray-600 border-gray-200' };
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Search Header */}
+      <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6">
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">Find Expert Mentors</h2>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mb-5">
+          Connect with industry experts for 1:1 career guidance, mock interviews, and skill coaching
+        </p>
+        
+        <div className="flex flex-col sm:flex-row gap-3">
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyPress={(e) => e.key === 'Enter' && searchMentors()}
+            placeholder="Search by name, expertise, or company..."
+            className="flex-1 px-4 py-2.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+          />
+          
+          <select
+            value={domain}
+            onChange={(e) => setDomain(e.target.value)}
+            className="w-full sm:w-48 px-4 py-2.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500"
+          >
+            <option value="">All Domains</option>
+            {domains.map(d => (
+              <option key={d} value={d}>{d}</option>
+            ))}
+          </select>
+          
+          <button
+            onClick={searchMentors}
+            disabled={loading}
+            className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium transition-colors disabled:opacity-50 flex items-center gap-2"
+          >
+            {loading ? (
+              <>
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" />
+                Searching...
+              </>
+            ) : (
+              'Search Mentors'
+            )}
+          </button>
+        </div>
+      </div>
+
+      {/* Results */}
+      {mentors.length > 0 && (
+        <div className="space-y-4">
+          <p className="text-sm text-gray-500 dark:text-gray-400">Found {mentors.length} mentor{mentors.length !== 1 ? 's' : ''}</p>
+          {mentors.map((mentor, idx) => {
+            const match = getMatchBadge(mentor.match_score);
+            return (
+              <div key={idx} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-5 hover:shadow-md transition-shadow">
+                <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-3 flex-wrap mb-2">
+                      <h3 className="text-lg font-semibold text-gray-900 dark:text-white">{mentor.name}</h3>
+                      <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${match.color}`}>
+                        {match.label} · {Math.round(mentor.match_score * 100)}%
+                      </span>
+                      {mentor.verified && (
+                        <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">✓ Verified</span>
+                      )}
+                    </div>
+                    <p className="text-sm text-indigo-600 dark:text-indigo-400 font-medium mb-1">{mentor.title}</p>
+                    <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">{mentor.company} · {mentor.experience} years exp · {mentor.domain}</p>
+                    <p className="text-sm text-gray-600 dark:text-gray-300 mb-3">{mentor.bio}</p>
+                    <div className="flex flex-wrap gap-2 mb-3">
+                      {mentor.expertise?.slice(0, 4).map((skill, i) => (
+                        <span key={i} className="text-xs bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 px-2 py-1 rounded-full">
+                          {skill}
+                        </span>
+                      ))}
+                      {mentor.expertise?.length > 4 && (
+                        <span className="text-xs text-gray-400">+{mentor.expertise.length - 4} more</span>
+                      )}
+                    </div>
+                    {mentor.match_reason && (
+                      <p className="text-xs text-gray-400 dark:text-gray-500 italic">✨ {mentor.match_reason}</p>
+                    )}
+                  </div>
+                  
+                  <div className="flex flex-col items-end gap-2">
+                    <div className="text-right">
+                      <p className="text-2xl font-bold text-gray-900 dark:text-white">₹{mentor.session_fee}</p>
+                      <p className="text-xs text-gray-400">per session (45 min)</p>
+                    </div>
+                    <button
+                      onClick={() => setSelectedMentor(selectedMentor?.id === mentor.id ? null : mentor)}
+                      className="px-4 py-2 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 rounded-lg text-sm font-medium hover:bg-indigo-100 dark:hover:bg-indigo-900/50 transition-colors"
+                    >
+                      {selectedMentor?.id === mentor.id ? 'Cancel' : 'Book Session'}
+                    </button>
+                  </div>
+                </div>
+                
+                {/* Booking Form */}
+                {selectedMentor?.id === mentor.id && (
+                  <div className="mt-5 pt-5 border-t border-gray-100 dark:border-gray-700">
+                    <h4 className="text-sm font-medium text-gray-900 dark:text-white mb-3">Schedule a session with {mentor.name}</h4>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+                      <input
+                        type="date"
+                        value={bookingData.date}
+                        onChange={(e) => setBookingData({ ...bookingData, date: e.target.value })}
+                        min={new Date().toISOString().split('T')[0]}
+                        className="px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                      />
+                      <input
+                        type="time"
+                        value={bookingData.time}
+                        onChange={(e) => setBookingData({ ...bookingData, time: e.target.value })}
+                        className="px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                      />
+                    </div>
+                    <textarea
+                      value={bookingData.message}
+                      onChange={(e) => setBookingData({ ...bookingData, message: e.target.value })}
+                      placeholder="What would you like to discuss? (optional)"
+                      rows={2}
+                      className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 resize-none mb-4"
+                    />
+                    <div className="flex gap-3">
+                      <button
+                        onClick={() => handleBookSession(mentor)}
+                        className="px-5 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium transition-colors"
+                      >
+                        Confirm Booking
+                      </button>
+                      <button
+                        onClick={() => setSelectedMentor(null)}
+                        className="px-5 py-2 border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* No results */}
+      {!loading && mentors.length === 0 && searchQuery && (
+        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-8 text-center">
+          <p className="text-gray-500 dark:text-gray-400">No mentors found matching your criteria.</p>
+          <p className="text-sm text-gray-400 mt-2">Try adjusting your search or domain filter.</p>
+        </div>
+      )}
+
+      {/* Booking status */}
+      {bookingStatus && (
+        <div className={`fixed bottom-4 right-4 p-4 rounded-lg shadow-lg transition-all ${
+          bookingStatus.success ? 'bg-green-100 border border-green-300 text-green-800' : 'bg-red-100 border border-red-300 text-red-800'
+        }`}>
+          <p className="text-sm">{bookingStatus.success || bookingStatus.error}</p>
+          <button 
+            onClick={() => setBookingStatus(null)}
+            className="absolute top-1 right-2 text-xs opacity-70 hover:opacity-100"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* Initial state / empty search */}
+      {!loading && mentors.length === 0 && !searchQuery && !domain && (
+        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-8 text-center">
+          <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-indigo-100 dark:bg-indigo-900/40 flex items-center justify-center">
+            <svg className="w-8 h-8 text-indigo-600 dark:text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+            </svg>
+          </div>
+          <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">Connect with Industry Experts</h3>
+          <p className="text-sm text-gray-500 dark:text-gray-400 max-w-md mx-auto">
+            Search for mentors by name, expertise, or domain. Get personalised 1:1 coaching for your career growth.
+          </p>
+          <div className="flex flex-wrap gap-2 justify-center mt-4">
+            {domains.slice(0, 4).map(d => (
+              <button
+                key={d}
+                onClick={() => { setDomain(d); searchMentors(); }}
+                className="text-xs px-3 py-1.5 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-full hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+              >
+                {d}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default MentorSearch;
