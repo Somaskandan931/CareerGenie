@@ -129,28 +129,29 @@ app.include_router(interview_live_router)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# REQUEST/RESPONSE MODELS
+# REQUEST/RESPONSE MODELS  (imported from models.py — single source of truth)
 # ─────────────────────────────────────────────────────────────────────────────
 
+from backend.models import (
+    JobMatchRequest          as MatchRequest,
+    AgentRunRequest,
+    DebateRunRequest         as DebateRequest,
+    ImportRoadmapRequest     as ImportRoadmapBody,
+    UpdateTaskRequest        as TaskUpdateBody,
+    ImportProjectsRequest    as ImportProjectsBody,
+    UpdateProjectRequest     as ProjectUpdateBody,
+    BulkUpdateDSARequest     as DSABulkUpdateBody,
+    AddInterviewRequest      as InterviewAddBody,
+    UpdateInterviewStageRequest as InterviewStageBody,
+    RankingPreferenceRequest as RankingPreferenceBody,
+    FeedbackRecordRequest    as FeedbackBody,
+)
+
+# Lightweight models not yet in models.py — keep here until promoted
 class ChatRequest(BaseModel):
     messages: List[Dict[str, str]]
     resume_text: Optional[str] = None
     session_id: Optional[str] = None
-
-
-class MatchRequest(BaseModel):
-    resume_text: str
-    job_query: Optional[str] = None
-    top_k: int = 10
-    num_jobs: int = 50
-    location: str = "India"
-    user_id: Optional[str] = None
-    min_match_score: float = 40.0
-    experience_level: Optional[str] = None
-    posted_within_days: Optional[int] = 14
-    exclude_remote: bool = False
-    force_refresh: bool = False
-
 
 class RoadmapRequest(BaseModel):
     resume_text: str
@@ -158,12 +159,10 @@ class RoadmapRequest(BaseModel):
     skill_gaps: Optional[List[str]] = None
     duration_weeks: int = 12
 
-
 class ATSRequest(BaseModel):
     resume_text: str
     target_role: str = "Software Engineer"
     job_description: Optional[str] = None
-
 
 class InterviewRequest(BaseModel):
     role: str
@@ -171,30 +170,21 @@ class InterviewRequest(BaseModel):
     resume_text: Optional[str] = None
     num_questions: int = 10
 
-
 class InterviewAnswerRequest(BaseModel):
     question: str
     answer: str
     role: str
     interview_type: str = "mixed"
 
-
 class ProgressUpdateRequest(BaseModel):
     task_id: str
     done: bool
     week_key: str
 
-
 class FeedbackRequest(BaseModel):
     signal_type: str
     item_id: str
     metadata: Optional[Dict] = None
-
-
-class DebateRequest(BaseModel):
-    topic: str
-    context: Dict
-    max_rounds: int = 2
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -931,6 +921,102 @@ async def rewrite_resume(request: ResumeRewriteRequest):
         return {"result": result}
     except Exception as e:
         logger.error(f"Resume rewrite error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# JOB POSTING ENDPOINTS  (Employer side)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class JobPostRequest(BaseModel):
+    title: str
+    company: str
+    location: str = "India"
+    description: str
+    requirements: Optional[str] = None
+    employment_type: str = "Full-time"
+    salary_range: Optional[str] = None
+    contact_email: Optional[str] = None
+    posted_by: Optional[str] = None
+
+
+@app.post("/jobs/post")
+async def post_job(request: JobPostRequest):
+    """Allow employers to post a job directly into the vector store."""
+    try:
+        import uuid as _uuid
+        from datetime import datetime
+        from backend.services.vector_store import vector_store
+
+        job = {
+            "id":              f"posted_{_uuid.uuid4().hex[:8]}",
+            "title":           request.title,
+            "company":         request.company,
+            "location":        request.location,
+            "description":     f"{request.description}\n\nRequirements: {request.requirements or ''}",
+            "employment_type": request.employment_type,
+            "salary_range":    request.salary_range or "Not disclosed",
+            "apply_link":      f"mailto:{request.contact_email}" if request.contact_email else None,
+            "posted_at":       "Just now",
+            "days_old":        0,
+            "fetched_at":      datetime.now().isoformat(),
+            "source":          "employer_posted",
+            "posted_by":       request.posted_by,
+        }
+
+        indexed = vector_store.index_jobs([job])
+        return {
+            "status":  "success",
+            "job_id":  job["id"],
+            "indexed": indexed,
+            "message": f"Job '{request.title}' at {request.company} is now live on the job board.",
+        }
+    except Exception as e:
+        logger.error(f"Job post error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/jobs/posted")
+async def list_posted_jobs():
+    """List all employer-posted jobs."""
+    try:
+        from backend.services.vector_store import vector_store
+        jobs   = vector_store.search("", top_k=200)
+        posted = [j for j in jobs if j.get("source") == "employer_posted"]
+        return {"jobs": posted, "total": len(posted)}
+    except Exception as e:
+        logger.error(f"List posted jobs error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LANGGRAPH DEEP ANALYSIS ENDPOINT
+# ─────────────────────────────────────────────────────────────────────────────
+
+class DeepAnalysisRequest(BaseModel):
+    resume_text: str
+    target_role: str = "Software Engineer"
+    duration_weeks: int = 12
+
+
+@app.post("/career/deep-analysis")
+async def career_deep_analysis(request: DeepAnalysisRequest):
+    """
+    4-node LangGraph flow:
+      parse_resume → gap_analysis → generate_roadmap → suggest_projects
+    Each node's output feeds the next node's state.
+    Falls back to sequential execution if langgraph is not installed.
+    """
+    try:
+        from backend.services.langgraph_career_flow import run_deep_analysis
+        result = run_deep_analysis(
+            resume_text    = request.resume_text,
+            target_role    = request.target_role,
+            duration_weeks = request.duration_weeks,
+        )
+        return result
+    except Exception as e:
+        logger.error(f"Deep analysis error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

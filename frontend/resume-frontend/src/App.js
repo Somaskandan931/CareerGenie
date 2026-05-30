@@ -12,6 +12,8 @@ import ProgressDashboard from './components/ProgressDashboard';
 import ResumeRewriter from './components/ResumeRewriter';
 import MentorSearch from './components/MentorSearch';
 import ResumeAnalyzer from './components/ResumeAnalyzer';
+import HomePage from './components/HomePage';
+import JobPost from './components/JobPost';
 import API_BASE_URL from './config';
 
 export const DarkModeContext = createContext({ dark: false, toggle: () => {} });
@@ -451,7 +453,7 @@ const LearningPathTab = ({ resumeText, careerAdvice, onImported }) => {
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
-  const [activeTab, setActiveTab]             = useState("jobs");
+  const [activeTab, setActiveTab]             = useState("home");
   const [resumeText, setResumeText]           = useState("");
   const [uploading, setUploading]             = useState(false);
   const [uploadError, setUploadError]         = useState(null);
@@ -503,12 +505,14 @@ export default function App() {
   const resumeSkills = skillComparison?.resume_skills?.map(s => s.skill) || [];
 
   const NAV_MAIN = [
+    { key: "home",      label: "Home",            icon: icons.check },
     { key: "jobs",      label: "Job Matches",     icon: icons.jobs },
     { key: "progress",  label: "Progress",        icon: icons.progress },
     { key: "learning",  label: "Learning",        icon: icons.learning, badge: careerAdvice?.skill_gaps?.length > 0 ? careerAdvice.skill_gaps.length : null },
     { key: "interview", label: "Interview Prep",  icon: icons.interview },
     { key: "analyzer",  label: "Resume Analyzer", icon: icons.ats },
     { key: "rewriter",  label: "Resume Rewriter", icon: icons.pen },
+    { key: "employer",  label: "Post a Job",      icon: icons.recruiter },
   ];
 
   const NAV_AI = [
@@ -519,19 +523,21 @@ export default function App() {
   ];
 
   const PAGE_TITLES = {
-    jobs:      "Job Matches",
-    progress:  "Progress Dashboard",
-    learning:  "Learning Path",
-    interview: "Interview Coach",
-    analyzer:  "Resume Analyzer",
-    rewriter:  "Resume Rewriter",
-    coach:     "Job Coach",
-    mentors:   "Expert Mentors",
-    insights:  "Market Insights",
-    institution: "Institution Analytics"
+    home:        "Career Genie",
+    jobs:        "Job Matches",
+    progress:    "Progress Dashboard",
+    learning:    "Learning Path",
+    interview:   "Interview Coach",
+    analyzer:    "Resume Analyzer",
+    rewriter:    "Resume Rewriter",
+    coach:       "Job Coach",
+    mentors:     "Expert Mentors",
+    insights:    "Market Insights",
+    institution: "Institution Analytics",
+    employer:    "Post a Job",
   };
 
-  const showResume = !["institution", "progress", "mentors"].includes(activeTab);
+  const showResume = !["institution", "progress", "mentors", "home", "employer"].includes(activeTab);
 
   const NavItem = ({ item }) => (
     <button onClick={() => setActiveTab(item.key)}
@@ -703,6 +709,8 @@ export default function App() {
             {activeTab === "interview"   && <InterviewCoach resumeText={resumeText} />}
             {activeTab === "analyzer"    && <ResumeAnalyzer resumeText={resumeText} />}
             {activeTab === "rewriter"    && <ResumeRewriter resumeText={resumeText} />}
+            {activeTab === "home"        && <HomePage resumeText={resumeText} careerAdvice={careerAdvice} onNavigate={setActiveTab} />}
+            {activeTab === "employer"    && <JobPost />}
             {activeTab === "institution" && <TNAnalyticsDashboard />}
 
           </div>
