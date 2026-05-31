@@ -271,6 +271,45 @@ class ProgressTracker:
         _save(user_id, state)
         return {"imported": total_tasks, "weeks": len(weeks)}
 
+    def get_full(self, user_id: str) -> Dict:
+        """
+        Return full raw state for the dashboard frontend.
+
+        The frontend expects:
+          {
+            roadmap:      { week_1: [task, ...], week_2: [...], ... },
+            projects:     [...],
+            dsa:          { topic: { solved, total, problems }, ... },
+            interviews:   [...],
+            activity_log: [...],
+          }
+
+        This is the ONLY method that should be used by the /full route.
+        get_summary() returns aggregated statistics, not raw arrays.
+        """
+        state = self.get_state(user_id)
+
+        # Guarantee roadmap values are always lists — never null / dicts
+        raw_roadmap = state.get("roadmap", {})
+        safe_roadmap: Dict[str, List] = {}
+        for week_key, value in raw_roadmap.items():
+            if isinstance(value, list):
+                safe_roadmap[week_key] = value
+            elif isinstance(value, dict) and isinstance(value.get("tasks"), list):
+                # Legacy shape: { tasks: [...] }
+                safe_roadmap[week_key] = value["tasks"]
+            else:
+                safe_roadmap[week_key] = []
+
+        return {
+            "roadmap":      safe_roadmap,
+            "projects":     state.get("projects", []),
+            "dsa":          state.get("dsa", {}),
+            "interviews":   state.get("interviews", []),
+            "activity_log": state.get("activity_log", [])[-365:],
+            "streak":       state.get("streak", {}),
+        }
+
     def get_roadmap_with_progress(self, user_id: str) -> Dict:
         """
         Return the stored roadmap dict keyed by week_key.

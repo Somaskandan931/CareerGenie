@@ -1,5 +1,4 @@
 import React, { useState } from "react";
-
 import API_BASE_URL from '../config';
 
 const QUICK_ROLES = [
@@ -8,34 +7,30 @@ const QUICK_ROLES = [
   "Product Manager", "Cloud Architect",
 ];
 
-// ─── Icons ────────────────────────────────────────────────────────────────────
-const TrendUpIcon = () => (
-  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+const Ico = ({ d, className = "w-4 h-4" }) => (
+  <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+    <path strokeLinecap="round" strokeLinejoin="round" d={d} />
   </svg>
 );
-const TrendDownIcon = () => (
-  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 17h8m0 0V9m0 8l-8-8-4 4-6-6" />
-  </svg>
-);
-const TrendFlatIcon = () => (
-  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14" />
-  </svg>
-);
-const SearchIcon = () => (
-  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-  </svg>
-);
+const I = {
+  up:     "M13 7h8m0 0v8m0-8l-8 8-4-4-6 6",
+  down:   "M13 17h8m0 0V9m0 8l-8-8-4 4-6-6",
+  flat:   "M5 12h14",
+  search: "M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z",
+  chart:  "M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z",
+  alert:  "M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z",
+};
 
-// ─── Sparkline (tiny SVG line chart) ─────────────────────────────────────────
-const Sparkline = ({ data, color = "#6366f1" }) => {
-  if (!data || data.length < 2) {
-    return <div className="h-8 flex items-center text-xs text-gray-400 dark:text-gray-500">No trend data</div>;
-  }
-  const w = 120, h = 32, pad = 2;
+const TREND_CFG = {
+  rising:  { icon: I.up,   color: "#10b981", bg: "bg-emerald-500/10 border-emerald-500/20", text: "text-emerald-400", label: "Rising" },
+  falling: { icon: I.down, color: "#ef4444", bg: "bg-red-500/10 border-red-500/20",         text: "text-red-400",     label: "Falling" },
+  stable:  { icon: I.flat, color: "#6366f1", bg: "bg-indigo-500/10 border-indigo-500/20",   text: "text-indigo-400",  label: "Stable" },
+  unknown: { icon: I.flat, color: "#64748b", bg: "bg-white/5 border-white/10",              text: "text-slate-500",   label: "No data" },
+};
+
+const Sparkline = ({ data, color }) => {
+  if (!data || data.length < 2) return <div className="h-8 text-xs text-slate-600 flex items-center">No trend data</div>;
+  const w = 100, h = 28, pad = 2;
   const max = Math.max(...data, 1);
   const pts = data.map((v, i) => {
     const x = pad + (i / (data.length - 1)) * (w - pad * 2);
@@ -44,223 +39,156 @@ const Sparkline = ({ data, color = "#6366f1" }) => {
   }).join(" ");
   return (
     <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`}>
-      <polyline points={pts} fill="none" stroke={color} strokeWidth="2"
-        strokeLinecap="round" strokeLinejoin="round" />
+      <polyline points={pts} fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 };
 
-// ─── Direction badge ──────────────────────────────────────────────────────────
-const DirectionBadge = ({ direction }) => {
-  const cfg = {
-    rising: { icon: <TrendUpIcon />, cls: "text-green-700 bg-green-100 border-green-200", label: "Rising" },
-    falling: { icon: <TrendDownIcon />, cls: "text-red-700 bg-red-100 border-red-200", label: "Falling" },
-    stable: { icon: <TrendFlatIcon />, cls: "text-gray-700 bg-gray-100 border-gray-200", label: "Stable" },
-    unknown: { icon: <TrendFlatIcon />, cls: "text-gray-500 bg-gray-50 border-gray-200", label: "No data" },
-  }[direction] || { icon: <TrendFlatIcon />, cls: "text-gray-500 bg-gray-50 border-gray-200", label: direction };
-  return (
-    <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full border ${cfg.cls}`}>
-      {cfg.icon}{cfg.label}
-    </span>
-  );
-};
-
-// ─── Trend card ───────────────────────────────────────────────────────────────
 const TrendCard = ({ keyword, data, isRole = false }) => {
-  const sparkColors = { rising: "#22c55e", falling: "#ef4444", stable: "#6366f1", unknown: "#9ca3af" };
+  const cfg = TREND_CFG[data.direction] || TREND_CFG.unknown;
   return (
-    <div className={`bg-white dark:bg-gray-800 rounded-xl border p-4 ${isRole ? "border-indigo-200 bg-indigo-50" : "border-gray-200"}`}>
+    <div className={`rounded-2xl border p-4 ${isRole ? "border-violet-500/20 bg-violet-500/5" : "border-white/8 bg-white/3"}`}>
       <div className="flex items-start justify-between mb-2">
-        <div className="flex-1 min-w-0">
-          <p className={`font-semibold text-sm truncate ${isRole ? "text-indigo-900" : "text-gray-800"}`}>
-            {isRole && "🎯 "}{keyword}
+        <div className="flex-1 min-w-0 pr-2">
+          <p className={`font-semibold text-sm truncate ${isRole ? "text-violet-300" : "text-slate-200"}`}>
+            {isRole ? "🎯 " : ""}{keyword}
           </p>
           <div className="flex items-center gap-2 mt-1">
-            <span className="text-xs text-gray-500">Avg: <strong>{data.avg}</strong>/100</span>
-            <span className="text-xs text-gray-500">Peak: <strong>{data.peak}</strong></span>
+            <span className="text-xs text-slate-600">Avg: <span className="text-slate-400 font-medium">{data.avg}</span>/100</span>
+            <span className="text-xs text-slate-600">Peak: <span className="text-slate-400 font-medium">{data.peak}</span></span>
           </div>
         </div>
-        <DirectionBadge direction={data.direction} />
+        <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full border ${cfg.bg} ${cfg.text} flex-shrink-0`}>
+          <Ico d={cfg.icon} className="w-3 h-3" />{cfg.label}
+        </span>
       </div>
-      <Sparkline data={data.sparkline} color={sparkColors[data.direction] || "#6366f1"} />
+      <Sparkline data={data.monthly_trend} color={cfg.color} />
     </div>
   );
 };
 
-// ─── Main Component ───────────────────────────────────────────────────────────
-const MarketInsights = ({ resumeSkills = [] }) => {
-  const [role, setRole] = useState("");
-  const [skillInput, setSkillInput] = useState("");
-  const [location, setLocation] = useState("India");
+export default function MarketInsights({ resumeSkills = [] }) {
+  const [role, setRole]       = useState("");
+  const [data, setData]       = useState(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [data, setData] = useState(null);
+  const [error, setError]     = useState(null);
 
-  const fetchInsights = async (overrideRole) => {
-    const targetRole = (overrideRole || role).trim();
-    if (!targetRole) { setError("Enter a role to analyse."); return; }
-    setLoading(true);
-    setError(null);
-    setData(null);
-
-    // Build skills list — from input field or from resume skills
-    const skills = skillInput.trim()
-      ? skillInput.split(",").map(s => s.trim()).filter(Boolean)
-      : resumeSkills.slice(0, 8);
-
+  const fetch_ = async (roleQuery = role) => {
+    if (!roleQuery.trim()) { setError("Enter a role to analyze."); return; }
+    setError(null); setLoading(true); setData(null);
     try {
       const res = await fetch(`${API_BASE_URL}/insights/market`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ role: targetRole, skills, location }),
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role: roleQuery.trim(), skills: resumeSkills }),
       });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`);
       setData(await res.json());
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
   };
 
-  const trendEntries = data ? Object.entries(data.trend_data) : [];
-  const roleEntry = trendEntries[0];
-  const skillEntries = trendEntries.slice(1);
+  const inp = "w-full px-4 py-2.5 text-sm rounded-xl border border-white/10 bg-white/5 text-white placeholder-slate-500 focus:ring-2 focus:ring-violet-500 focus:border-transparent outline-none transition";
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="bg-gradient-to-r from-indigo-600 to-purple-600 rounded-2xl p-7 text-white">
-        <h2 className="text-2xl font-black mb-1">📈 Market Insights</h2>
-        <p className="text-indigo-200 text-sm">
-          Real Google Trends data + AI analysis for any role or skill in {location}
-        </p>
-      </div>
-
-      {/* Controls */}
-      <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 p-6 space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1">
-              Target Role <span className="text-red-500">*</span>
-            </label>
-            <input type="text" value={role} onChange={e => setRole(e.target.value)}
-              placeholder="e.g. Machine Learning Engineer"
-              onKeyDown={e => e.key === "Enter" && fetchInsights()}
-              className="w-full px-3 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg text-sm focus:ring-2 focus:ring-indigo-400 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500" />
+    <div className="space-y-5">
+      {/* Input card */}
+      <div className="rounded-2xl border border-white/10 bg-white/3 p-5">
+        <div className="flex items-center gap-3 mb-5">
+          <div className="w-8 h-8 rounded-xl bg-emerald-500/15 flex items-center justify-center">
+            <Ico d={I.chart} className="w-4 h-4 text-emerald-400" />
           </div>
           <div>
-            <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1">Location</label>
-            <select value={location} onChange={e => setLocation(e.target.value)}
-              className="w-full px-3 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg text-sm focus:ring-2 focus:ring-indigo-400 bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
-              {["India", "Tamil Nadu", "Bangalore", "Chennai", "Mumbai", "Hyderabad"].map(l => (
-                <option key={l} value={l}>{l}</option>
-              ))}
-            </select>
-          </div>
-          <div className="md:col-span-2">
-            <label className="block text-xs font-semibold text-gray-700 dark:text-gray-300 mb-1">
-              Skills to Track
-              <span className="ml-1 font-normal text-gray-400">
-                (comma-separated — leave blank to use your resume skills)
-              </span>
-            </label>
-            <input type="text" value={skillInput} onChange={e => setSkillInput(e.target.value)}
-              placeholder="e.g. Python, TensorFlow, Docker, Kubernetes"
-              className="w-full px-3 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg text-sm focus:ring-2 focus:ring-indigo-400 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500" />
+            <h2 className="text-sm font-semibold text-white">Market Insights</h2>
+            <p className="text-xs text-slate-500">Real-time demand trends for roles & skills</p>
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-2 items-center">
-          <button onClick={() => fetchInsights()} disabled={loading || !role.trim()}
-            className="bg-gradient-to-r from-indigo-600 to-purple-600 text-white px-7 py-2.5 rounded-xl font-semibold text-sm disabled:opacity-50 hover:from-indigo-700 hover:to-purple-700 transition-all shadow-md flex items-center gap-2">
+        {error && (
+          <div className="flex items-center gap-2 bg-red-500/10 border border-red-500/20 rounded-xl p-3 mb-4 text-sm text-red-400">
+            <Ico d={I.alert} className="w-4 h-4 flex-shrink-0" />{error}
+          </div>
+        )}
+
+        <div className="flex gap-2 mb-4">
+          <input value={role} onChange={e => setRole(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && fetch_()}
+            placeholder="e.g. ML Engineer, Full Stack Developer"
+            className={inp + " flex-1"} />
+          <button onClick={() => fetch_()} disabled={loading}
+            className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold px-5 py-2.5 rounded-xl disabled:opacity-40 transition-all">
             {loading
-              ? <><div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" />Analysing...</>
-              : <><SearchIcon />Get Market Insights</>}
+              ? <><span className="animate-spin rounded-full h-3.5 w-3.5 border-b-2 border-white" />Analyzing…</>
+              : <><Ico d={I.search} className="w-4 h-4" />Analyze</>}
           </button>
-          <span className="text-xs text-gray-400">or try:</span>
-          {QUICK_ROLES.slice(0, 4).map(r => (
-            <button key={r} onClick={() => { setRole(r); fetchInsights(r); }}
-              className="text-xs bg-gray-100 hover:bg-indigo-50 hover:text-indigo-700 text-gray-600 border border-gray-200 hover:border-indigo-300 px-3 py-1.5 rounded-full transition-colors">
+        </div>
+
+        <div className="flex flex-wrap gap-1.5">
+          <p className="text-xs text-slate-600 w-full mb-1 uppercase tracking-widest font-medium">Quick roles</p>
+          {QUICK_ROLES.map((r, i) => (
+            <button key={i} onClick={() => { setRole(r); fetch_(r); }}
+              className="text-xs border border-white/10 text-slate-400 hover:border-emerald-500/30 hover:text-emerald-300 px-3 py-1.5 rounded-full transition-all">
               {r}
             </button>
           ))}
         </div>
-
-        {error && (
-          <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-700 rounded-lg px-4 py-2 text-sm text-red-800 dark:text-red-300">
-            {error}
-          </div>
-        )}
       </div>
 
       {/* Results */}
-      {data && (
-        <>
-          {/* Role trend + hot skills summary */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {roleEntry && (
-              <div className="md:col-span-1">
-                <TrendCard keyword={roleEntry[0]} data={roleEntry[1]} isRole />
-              </div>
-            )}
-            <div className="md:col-span-2 bg-white rounded-xl border border-gray-200 p-5">
-              <p className="text-sm font-bold text-gray-800 mb-3">🔥 Hot Skills Right Now</p>
-              {data.hot_skills.length > 0 ? (
-                <div className="flex flex-wrap gap-2">
-                  {data.hot_skills.map((s, i) => (
-                    <span key={i} className="text-sm bg-green-100 text-green-800 border border-green-200 px-3 py-1 rounded-full font-medium">
-                      📈 {s}
-                    </span>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-sm text-gray-400">No clearly rising skills detected in this period.</p>
-              )}
-              <p className="text-xs text-gray-400 mt-3">{data.timeframe}</p>
-            </div>
-          </div>
+      {loading && (
+        <div className="rounded-2xl border border-white/8 p-10 text-center bg-white/2">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-emerald-500 mx-auto mb-3" />
+          <p className="text-sm text-slate-400">Analyzing market trends…</p>
+        </div>
+      )}
 
-          {/* Skill trend cards */}
-          {skillEntries.length > 0 && (
+      {data && (
+        <div className="space-y-4">
+          {/* Role header */}
+          {data.role_insight && (
+            <TrendCard keyword={data.role_insight.keyword} data={data.role_insight} isRole />
+          )}
+
+          {/* Summary */}
+          {data.summary && (
+            <div className="rounded-2xl border border-white/8 bg-white/3 p-5">
+              <p className="text-xs font-medium text-slate-500 uppercase tracking-widest mb-2">Market Summary</p>
+              <p className="text-sm text-slate-300 leading-relaxed">{data.summary}</p>
+              {data.salary_range && (
+                <div className="mt-3 flex items-center gap-2">
+                  <span className="text-xs text-slate-500">Salary range:</span>
+                  <span className="text-sm font-bold text-emerald-400">{data.salary_range}</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Skill trends */}
+          {data.skill_trends?.length > 0 && (
             <div>
-              <h3 className="font-bold text-gray-900 mb-3">📊 Skill Trend Breakdown</h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {skillEntries.map(([kw, d]) => (
-                  <TrendCard key={kw} keyword={kw} data={d} />
+              <p className="text-xs font-medium text-slate-500 uppercase tracking-widest mb-3">Skill Demand Trends</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {data.skill_trends.map((t, i) => (
+                  <TrendCard key={i} keyword={t.keyword} data={t} />
                 ))}
               </div>
             </div>
           )}
 
-          {/* AI Analysis */}
-          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 p-6">
-            <h3 className="font-bold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
-              AI Market Analysis
-              <span className="text-xs font-normal text-gray-400 dark:text-gray-500 bg-gray-100 dark:bg-gray-700 px-2 py-0.5 rounded-full">
-                Powered by Groq
-              </span>
-            </h3>
-            <div className="prose prose-sm max-w-none text-gray-700 dark:text-gray-300">
-              {data.analysis.split('\n').map((line, i) => {
-                if (line.startsWith('- ') || line.startsWith('• ')) {
-                  return (
-                    <div key={i} className="flex items-start gap-2 mb-1">
-                      <span className="text-indigo-500 mt-0.5 flex-shrink-0">→</span>
-                      <span>{line.replace(/^[-•]\s*/, '')}</span>
-                    </div>
-                  );
-                }
-                return line.trim()
-                  ? <p key={i} className="mb-3">{line}</p>
-                  : null;
-              })}
+          {/* Top skills */}
+          {data.top_skills?.length > 0 && (
+            <div className="rounded-2xl border border-white/8 bg-white/3 p-5">
+              <p className="text-xs font-medium text-slate-500 uppercase tracking-widest mb-3">Top In-Demand Skills</p>
+              <div className="flex flex-wrap gap-2">
+                {data.top_skills.map((s, i) => (
+                  <span key={i} className="text-xs bg-violet-500/10 border border-violet-500/20 text-violet-300 px-3 py-1.5 rounded-full font-medium">
+                    {s}
+                  </span>
+                ))}
+              </div>
             </div>
-          </div>
-        </>
+          )}
+        </div>
       )}
     </div>
   );
-};
-
-export default MarketInsights;
+}

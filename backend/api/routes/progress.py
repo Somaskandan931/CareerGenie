@@ -4,16 +4,50 @@ Progress API Routes
 Endpoints for progress tracking, roadmap management, and interview tracking.
 """
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, validator
 
 from backend.core.logging import get_logger
 
 logger = get_logger("routes.progress")
 
 router = APIRouter(prefix="/progress", tags=["Progress"])
+
+
+# ── Strict Response Models (prevents frontend shape mismatches) ─────────────
+
+class TaskSchema(BaseModel):
+    id: str
+    week: int = 0
+    phase: Any = None
+    phase_title: str = ""
+    topic: str
+    description: str = ""
+    resources: List[Any] = []
+    milestone: str = ""
+    hours: int = 8
+    done: bool = False
+    done_at: Optional[str] = None
+
+    class Config:
+        extra = "allow"  # forward-compatible with new fields
+
+
+class FullProgressResponse(BaseModel):
+    """
+    Contract between backend and frontend ProgressDashboard.
+
+    roadmap values are ALWAYS List[TaskSchema] — never null, never a dict.
+    This eliminates the `tasks.filter is not a function` crash class.
+    """
+    roadmap:      Dict[str, List[TaskSchema]] = {}
+    projects:     List[Any] = []
+    dsa:          Dict[str, Any] = {}
+    interviews:   List[Any] = []
+    activity_log: List[Any] = []
+    streak:       Dict[str, Any] = {}
 
 
 # ── Request Models ──────────────────────────────────────────────────────────────
@@ -95,15 +129,18 @@ async def get_progress_summary(user_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/{user_id}/full")
+@router.get("/{user_id}/full", response_model=FullProgressResponse)
 async def get_progress_full(user_id: str):
-    """Get full progress data for a user."""
+    """
+    Get full raw progress data for the dashboard frontend.
+
+    Returns roadmap as { week_key: [task, ...] } arrays — never null or
+    nested objects — so the frontend can safely call .filter() / .map().
+    """
     try:
         from backend.services.progress_tracker import get_progress_tracker
         tracker = get_progress_tracker()
-        if hasattr(tracker, "get_full"):
-            return tracker.get_full(user_id)
-        return tracker.get_summary(user_id)
+        return tracker.get_full(user_id)
     except Exception as e:
         logger.error(f"Progress full error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

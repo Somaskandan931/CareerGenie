@@ -1,201 +1,176 @@
 import { useState, useEffect } from "react";
 import API_BASE_URL from '../config';
 
-const STATS = [
-  { label: "AI-Powered Tools",  value: "12+",  color: "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300" },
-  { label: "Job Sources",       value: "Live", color: "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300" },
-  { label: "Agent Systems",     value: "2",    color: "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300" },
-  { label: "LLM Providers",     value: "4",    color: "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300" },
-];
+const Ico = ({ d, className = "w-4 h-4" }) => (
+  <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+    <path strokeLinecap="round" strokeLinejoin="round" d={d} />
+  </svg>
+);
+const I = {
+  check:  "M5 13l4 4L19 7",
+  arrow:  "M13 7l5 5m0 0l-5 5m5-5H6",
+  spark:  "M13 10V3L4 14h7v7l9-11h-7z",
+  alert:  "M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z",
+};
 
 const FEATURES = [
-  {
-    key:   "jobs",
-    title: "Job Matching",
-    desc:  "Matches your resume against live job listings and ranks them by how well your skills align.",
-    icon:  "💼",
-    badge: "Live Jobs",
-    border: "hover:border-indigo-400 dark:hover:border-indigo-500",
-  },
-  {
-    key:   "analyzer",
-    title: "Resume Analyzer",
-    desc:  "Scores your resume for ATS compatibility and shows exactly how recruiters evaluate it.",
-    icon:  "📄",
-    badge: "ATS",
-    border: "hover:border-blue-400 dark:hover:border-blue-500",
-  },
-  {
-    key:   "rewriter",
-    title: "Resume Rewriter",
-    desc:  "Rewrites your resume with stronger action verbs, quantified achievements, and ATS-friendly formatting.",
-    icon:  "✍️",
-    badge: "AI",
-    border: "hover:border-violet-400 dark:hover:border-violet-500",
-  },
-  {
-    key:   "learning",
-    title: "Learning Path",
-    desc:  "Generates a week-by-week learning plan from your skill gaps, with real resource links and portfolio projects.",
-    icon:  "🗺️",
-    badge: "Guided",
-    border: "hover:border-green-400 dark:hover:border-green-500",
-  },
-  {
-    key:   "interview",
-    title: "Interview Coach",
-    desc:  "Role-specific question generation and AI feedback on your answers in real-time.",
-    icon:  "🎤",
-    badge: "AI Coach",
-    border: "hover:border-red-400 dark:hover:border-red-500",
-  },
-  {
-    key:   "coach",
-    title: "Career Coach",
-    desc:  "Ask Genie anything about your career — salary negotiation, role transitions, skill gaps.",
-    icon:  "🤖",
-    badge: "Chat",
-    border: "hover:border-orange-400 dark:hover:border-orange-500",
-  },
-  {
-    key:   "mentors",
-    title: "Expert Mentors",
-    desc:  "Find and book sessions with industry professionals matched to your skill gaps.",
-    icon:  "👥",
-    badge: "Mentorship",
-    border: "hover:border-teal-400 dark:hover:border-teal-500",
-  },
-  {
-    key:   "employer",
-    title: "Post a Job",
-    desc:  "Employers: post jobs directly to our live board. Candidates see them immediately.",
-    icon:  "📢",
-    badge: "Employer",
-    border: "hover:border-yellow-400 dark:hover:border-yellow-500",
-  },
+  { key:"jobs",      icon:"💼", title:"Job Matching",      desc:"Match your resume against live job listings ranked by fit.",    badge:"Live",    color:"violet" },
+  { key:"analyzer",  icon:"📄", title:"ATS Analyzer",      desc:"Score your resume for ATS compatibility + HR recruiter sim.", badge:"ATS",     color:"blue"   },
+  { key:"rewriter",  icon:"✍️",  title:"Resume Rewriter",   desc:"AI-rewrites with stronger verbs, quantified wins, ATS format.",badge:"AI",      color:"indigo" },
+  { key:"learning",  icon:"🗺️", title:"Learning Path",     desc:"Week-by-week plan from your skill gaps with real resources.",  badge:"Guided",  color:"emerald"},
+  { key:"interview", icon:"🎤", title:"Interview Coach",   desc:"Live camera mock interviews with real-time AI feedback.",      badge:"AI Coach",color:"cyan"   },
+  { key:"coach",     icon:"🤖", title:"Career Coach",      desc:"Chat with Genie about salary, transitions, and strategy.",    badge:"Chat",    color:"amber"  },
+  { key:"mentors",   icon:"👥", title:"Expert Mentors",    desc:"Book sessions with pros matched to your skill gaps.",          badge:"Book",    color:"teal"   },
+  { key:"insights",  icon:"📈", title:"Market Insights",   desc:"Real-time demand trends for roles and skills.",               badge:"Trends",  color:"rose"   },
+  { key:"employer",  icon:"📢", title:"Post a Job",        desc:"Employers: post to our live board — candidates see it now.", badge:"Employer",color:"orange" },
 ];
 
+const COLOR_MAP = {
+  violet:  { bg: "bg-violet-500/15",  border: "border-violet-500/20",  text: "text-violet-400",  hover: "hover:border-violet-500/40" },
+  blue:    { bg: "bg-blue-500/15",    border: "border-blue-500/20",    text: "text-blue-400",    hover: "hover:border-blue-500/40" },
+  indigo:  { bg: "bg-indigo-500/15",  border: "border-indigo-500/20",  text: "text-indigo-400",  hover: "hover:border-indigo-500/40" },
+  emerald: { bg: "bg-emerald-500/15", border: "border-emerald-500/20", text: "text-emerald-400", hover: "hover:border-emerald-500/40" },
+  cyan:    { bg: "bg-cyan-500/15",    border: "border-cyan-500/20",    text: "text-cyan-400",    hover: "hover:border-cyan-500/40" },
+  amber:   { bg: "bg-amber-500/15",   border: "border-amber-500/20",   text: "text-amber-400",   hover: "hover:border-amber-500/40" },
+  teal:    { bg: "bg-teal-500/15",    border: "border-teal-500/20",    text: "text-teal-400",    hover: "hover:border-teal-500/40" },
+  rose:    { bg: "bg-rose-500/15",    border: "border-rose-500/20",    text: "text-rose-400",    hover: "hover:border-rose-500/40" },
+  orange:  { bg: "bg-orange-500/15",  border: "border-orange-500/20",  text: "text-orange-400",  hover: "hover:border-orange-500/40" },
+};
+
 export default function HomePage({ resumeText, careerAdvice, onNavigate }) {
-  const [apiStatus,  setApiStatus]  = useState(null);
-  const [postedJobs, setPostedJobs] = useState(0);
+  const [apiStatus, setApiStatus] = useState(null);
 
   useEffect(() => {
-    fetch(`${API_BASE_URL}/config`)
-      .then(r => r.json()).then(setApiStatus).catch(() => null);
-    fetch(`${API_BASE_URL}/jobs/posted`)
-      .then(r => r.json()).then(d => setPostedJobs(d.total || 0)).catch(() => null);
+    fetch(`${API_BASE_URL}/health`)
+      .then(r => r.json())
+      .then(d => setApiStatus(d.status === "healthy" ? "online" : "degraded"))
+      .catch(() => setApiStatus("offline"));
   }, []);
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-8">
+    <div className="space-y-8">
+      {/* Hero */}
+      <div className="rounded-2xl border border-white/8 p-8 relative overflow-hidden"
+        style={{ background: "linear-gradient(135deg, rgba(124,58,237,0.12) 0%, rgba(37,99,235,0.08) 100%)" }}>
+        <div className="absolute top-0 right-0 w-64 h-64 opacity-5"
+          style={{ background: "radial-gradient(circle, #7c3aed, transparent)", borderRadius: "50%", transform: "translate(30%,-30%)" }} />
 
-      {/* ── Hero ─────────────────────────────────────────────────────────── */}
-      <div className="text-center mb-10">
-        <div className="inline-flex items-center gap-2 px-3 py-1 bg-indigo-50 dark:bg-indigo-900/30 border border-indigo-200 dark:border-indigo-700 rounded-full text-xs text-indigo-700 dark:text-indigo-300 font-medium mb-4">
-          <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full animate-pulse" />
-          {apiStatus ? "All systems operational" : "Connecting to backend..."}
-        </div>
-
-        <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">
-          Career Genie AI
-        </h1>
-        <p className="text-sm text-gray-500 dark:text-gray-400 max-w-xl mx-auto">
-          Find jobs that match your resume, fix your ATS score, and prepare for interviews — all in one place.
-        </p>
-
-        {!resumeText ? (
-          <div className="mt-5 p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-xl text-sm text-amber-700 dark:text-amber-300">
-            👆 Upload your resume from the sidebar to unlock all personalised features
+        <div className="relative">
+          <div className="flex items-center gap-2 mb-4">
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center text-lg"
+              style={{ background: "linear-gradient(135deg,#7c3aed,#2563eb)" }}>🧞</div>
+            <div>
+              <h1 className="text-2xl font-black text-white" style={{ fontFamily: "'Syne', sans-serif" }}>
+                Career Genie AI
+              </h1>
+              <p className="text-xs text-slate-500">Your AI-powered career intelligence platform</p>
+            </div>
+            <div className="ml-auto flex items-center gap-1.5">
+              <span className={`w-2 h-2 rounded-full ${apiStatus === "online" ? "bg-emerald-400" : apiStatus === "offline" ? "bg-red-400" : "bg-amber-400"} animate-pulse`} />
+              <span className="text-xs text-slate-500 capitalize">{apiStatus || "connecting…"}</span>
+            </div>
           </div>
-        ) : (
-          <div className="mt-5 p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700 rounded-xl text-sm text-green-700 dark:text-green-300">
-            ✅ Resume loaded — all {FEATURES.length} tools are ready for you
-          </div>
-        )}
-      </div>
 
-      {/* ── Stats ────────────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-7">
-        {STATS.map((s, i) => (
-          <div key={i} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4 text-center">
-            <p className={`text-xl font-bold mb-1 px-2 py-0.5 rounded-lg inline-block ${s.color}`}>{s.value}</p>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{s.label}</p>
-          </div>
-        ))}
-      </div>
-
-      {/* ── Employer jobs alert ───────────────────────────────────────────── */}
-      {postedJobs > 0 && (
-        <div className="mb-5 p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-700 rounded-xl text-sm text-yellow-700 dark:text-yellow-300 flex items-center gap-2">
-          <span>📢</span>
-          <span>
-            <strong>{postedJobs}</strong> employer-posted job{postedJobs !== 1 ? "s" : ""} currently live on the board.
-          </span>
-          <button
-            onClick={() => onNavigate("jobs")}
-            className="ml-auto text-xs underline opacity-80 hover:opacity-100"
-          >
-            View all →
-          </button>
-        </div>
-      )}
-
-      {/* ── Skill gap summary ─────────────────────────────────────────────── */}
-      {careerAdvice?.skill_gaps?.length > 0 && (
-        <div className="mb-5 p-4 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-700 rounded-xl">
-          <p className="text-sm font-medium text-purple-700 dark:text-purple-300 mb-2">
-            📊 {careerAdvice.skill_gaps.length} skill gaps identified for your profile
+          <p className="text-sm text-slate-300 leading-relaxed max-w-2xl mb-6">
+            From resume parsing to AI mock interviews, job matching, and personalised learning paths —
+            everything you need to accelerate your career in one platform.
           </p>
-          <div className="flex flex-wrap gap-2">
-            {careerAdvice.skill_gaps.slice(0, 6).map((g, i) => (
-              <span
-                key={i}
-                className="text-xs bg-white dark:bg-gray-800 border border-purple-200 dark:border-purple-700 text-purple-700 dark:text-purple-300 px-2 py-1 rounded-lg"
-              >
-                {g.skill}
-              </span>
-            ))}
-          </div>
-          <button
-            onClick={() => onNavigate("learning")}
-            className="mt-3 text-xs text-purple-600 dark:text-purple-400 underline"
-          >
-            Generate your learning path →
-          </button>
+
+          {resumeText ? (
+            <div className="flex items-center gap-3 flex-wrap">
+              <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
+                <Ico d={I.check} className="w-4 h-4 text-emerald-400" />
+                <span className="text-sm text-emerald-400 font-medium">Resume loaded · {(resumeText.length/1000).toFixed(1)}k chars</span>
+              </div>
+              <button onClick={() => onNavigate("jobs")}
+                className="flex items-center gap-2 bg-violet-600 hover:bg-violet-500 text-white text-sm font-semibold px-5 py-2 rounded-xl transition-all">
+                Find Jobs <Ico d={I.arrow} className="w-4 h-4" />
+              </button>
+              <button onClick={() => onNavigate("analyzer")}
+                className="text-sm text-slate-400 border border-white/10 px-4 py-2 rounded-xl hover:border-white/20 hover:text-white transition">
+                Analyze Resume
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-3 flex-wrap">
+              <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-500/10 border border-amber-500/20">
+                <Ico d={I.alert} className="w-4 h-4 text-amber-400" />
+                <span className="text-sm text-amber-400 font-medium">Upload your resume from the sidebar to get started</span>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Career advice snapshot */}
+      {careerAdvice && (
+        <div className="rounded-2xl border border-violet-500/20 p-5"
+          style={{ background: "rgba(124,58,237,0.06)" }}>
+          <p className="text-xs font-medium text-violet-400 uppercase tracking-widest mb-3">Your Career Snapshot</p>
+          {careerAdvice.current_assessment && (
+            <p className="text-sm text-slate-300 leading-relaxed mb-4 border-l-2 border-violet-500 pl-4">
+              {careerAdvice.current_assessment}
+            </p>
+          )}
+          {careerAdvice.skill_gaps?.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              <p className="text-xs text-slate-500 w-full mb-1">Skill gaps to address:</p>
+              {careerAdvice.skill_gaps.map((g, i) => (
+                <span key={i} className="text-xs bg-red-500/10 border border-red-500/20 text-red-300 px-2.5 py-1 rounded-full">
+                  {g.skill || g}
+                </span>
+              ))}
+              <button onClick={() => onNavigate("learning")}
+                className="text-xs text-violet-300 border border-violet-500/30 px-3 py-1 rounded-full hover:bg-violet-500/10 transition">
+                Generate Learning Path →
+              </button>
+            </div>
+          )}
         </div>
       )}
 
-      {/* ── Feature cards ─────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {FEATURES.map(f => (
-          <button
-            key={f.key}
-            onClick={() => onNavigate(f.key)}
-            className={`text-left p-4 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl hover:shadow-md transition-all duration-150 ${f.border}`}
-          >
-            <div className="flex items-start gap-3">
-              <span className="text-2xl flex-shrink-0">{f.icon}</span>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-1">
-                  <p className="text-sm font-medium text-gray-900 dark:text-white">{f.title}</p>
-                  <span className="text-xs bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-300 px-1.5 py-0.5 rounded font-mono flex-shrink-0">
+      {/* Feature grid */}
+      <div>
+        <p className="text-xs font-medium text-slate-600 uppercase tracking-widest mb-4">All Features</p>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+          {FEATURES.map(f => {
+            const c = COLOR_MAP[f.color] || COLOR_MAP.violet;
+            return (
+              <button key={f.key} onClick={() => onNavigate(f.key)}
+                className={`text-left p-4 rounded-2xl border border-white/8 bg-white/3 transition-all group ${c.hover}`}>
+                <div className="flex items-start justify-between mb-3">
+                  <div className={`w-8 h-8 rounded-xl ${c.bg} ${c.border} border flex items-center justify-center text-base`}>
+                    {f.icon}
+                  </div>
+                  <span className={`text-xs px-2 py-0.5 rounded-full border ${c.bg} ${c.border} ${c.text} font-medium`}>
                     {f.badge}
                   </span>
                 </div>
-                <p className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed">{f.desc}</p>
-              </div>
+                <p className="text-sm font-semibold text-white mb-1 group-hover:text-white">{f.title}</p>
+                <p className="text-xs text-slate-500 leading-relaxed">{f.desc}</p>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Stats bar */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {[
+          { label: "AI Tools",      value: "12+",  color: "violet" },
+          { label: "Job Sources",   value: "Live", color: "emerald" },
+          { label: "Agent Systems", value: "2",    color: "blue" },
+          { label: "LLM Providers", value: "4+",   color: "amber" },
+        ].map(({ label, value, color }) => {
+          const c = COLOR_MAP[color] || COLOR_MAP.violet;
+          return (
+            <div key={label} className={`rounded-2xl border ${c.border} ${c.bg} p-4 text-center`}>
+              <p className={`text-2xl font-black ${c.text}`} style={{ fontFamily: "'Syne', sans-serif" }}>{value}</p>
+              <p className="text-xs text-slate-500 mt-1">{label}</p>
             </div>
-          </button>
-        ))}
+          );
+        })}
       </div>
-
-      {/* ── Tech stack footer ─────────────────────────────────────────────── */}
-      <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-700">
-        <p className="text-xs text-center text-gray-400 dark:text-gray-600">
-          Career Genie · AI-powered career tools
-        </p>
-      </div>
-
     </div>
   );
 }

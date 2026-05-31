@@ -1,287 +1,144 @@
 import React, { useState } from "react";
 
-const SearchIcon = ({ size = "h-5 w-5" }) => (
-  <svg className={size} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+const Ico = ({ d, className = "w-4 h-4" }) => (
+  <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+    <path strokeLinecap="round" strokeLinejoin="round" d={d} />
   </svg>
 );
+const I = {
+  search: "M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z",
+  pin:    "M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z M15 11a3 3 0 11-6 0 3 3 0 016 0z",
+  filter: "M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z",
+  check:  "M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z",
+  brief:  "M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z",
+};
 
-const AlertCircle = () => (
-  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-  </svg>
-);
+const POPULAR = [
+  { query: "software engineer",  location: "India" },
+  { query: "data scientist",     location: "Bangalore" },
+  { query: "product manager",    location: "Mumbai" },
+  { query: "frontend developer", location: "Pune" },
+];
 
-const CheckCircle = () => (
-  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-  </svg>
-);
+const inp = "w-full px-4 py-2.5 text-sm rounded-xl border border-white/10 bg-white/5 text-white placeholder-slate-500 focus:ring-2 focus:ring-violet-500 focus:border-transparent outline-none transition";
+const sel = inp + " cursor-pointer";
 
-const Briefcase = ({ size = "h-6 w-6" }) => (
-  <svg className={size} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m8 0V6a2 2 0 012 2v6a2 2 0 01-2 2H8a2 2 0 01-2-2V8a2 2 0 012-2V6" />
-  </svg>
-);
-
-const JobSearch = ({ setJobQuery, setJobLocation, setFilters }) => {
-  const [query, setQuery] = useState("");
+export default function JobSearch({ setJobQuery, setJobLocation, setFilters }) {
+  const [query,    setQuery]    = useState("");
   const [location, setLocation] = useState("India");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [success, setSuccess] = useState(null);
-
-  // Filter state
-  const [localFilters, setLocalFilters] = useState({
-    experienceLevel: '',
-    minMatchScore: 40,
-    postedWithinDays: 14,
-    excludeRemote: false
+  const [showF,    setShowF]    = useState(false);
+  const [success,  setSuccess]  = useState(false);
+  const [error,    setError]    = useState(null);
+  const [localF, setLocalF]     = useState({
+    experienceLevel: "", minMatchScore: 40, postedWithinDays: 14, excludeRemote: false,
   });
 
-  const popularSearches = [
-    { query: "software engineer", location: "India" },
-    { query: "data scientist", location: "Bangalore" },
-    { query: "product manager", location: "Mumbai" },
-    { query: "frontend developer", location: "Pune" },
-  ];
-
-  const handleSearch = async (searchQuery = query, searchLocation = location) => {
-    const trimmedQuery = searchQuery.trim();
-
-    if (!trimmedQuery) {
-      setError("Please enter a search term");
-      return;
-    }
-
-    setLoading(true);
+  const handleSearch = (q = query, loc = location) => {
+    if (!q.trim()) { setError("Please enter a search term"); return; }
     setError(null);
-    setSuccess(null);
-
-    try {
-      setJobQuery(trimmedQuery);
-      setJobLocation(searchLocation.trim() || "India");
-
-      // Pass filters to parent
-      if (setFilters) {
-        setFilters(localFilters);
-      }
-
-      setSuccess(`Searching for "${trimmedQuery}" jobs in ${searchLocation || "India"}...`);
-      setTimeout(() => setSuccess(null), 3000);
-    } catch (err) {
-      setError(err.message);
-      setJobQuery("");
-      setJobLocation("");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleKeyPress = (e) => {
-    if (e.key === 'Enter') handleSearch();
-  };
-
-  const handleQuickSearch = (popularQuery, popularLocation) => {
-    setQuery(popularQuery);
-    setLocation(popularLocation);
-    handleSearch(popularQuery, popularLocation);
-  };
-
-  const handleFilterChange = (key, value) => {
-    setLocalFilters(prev => ({ ...prev, [key]: value }));
+    setJobQuery(q.trim());
+    setJobLocation(loc);
+    setFilters(localF);
+    setSuccess(true);
+    setTimeout(() => setSuccess(false), 2000);
   };
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-8 mb-8">
-      <div className="flex items-center mb-6">
-        <Briefcase />
-        <h2 className="text-2xl font-bold text-gray-900 dark:text-white ml-3">Job Search</h2>
+    <div className="rounded-2xl border border-white/10 bg-white/3 p-5 space-y-4">
+      {/* Search row */}
+      <div className="flex gap-3">
+        <div className="relative flex-1">
+          <Ico d={I.search} className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+          <input
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && handleSearch()}
+            placeholder="e.g. software engineer, data scientist…"
+            className="w-full pl-10 pr-4 py-2.5 text-sm rounded-xl border border-white/10 bg-white/5 text-white placeholder-slate-500 focus:ring-2 focus:ring-violet-500 focus:border-transparent outline-none transition"
+          />
+        </div>
+        <div className="relative w-44">
+          <Ico d={I.pin} className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+          <input
+            value={location}
+            onChange={e => setLocation(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && handleSearch()}
+            placeholder="Location"
+            className="w-full pl-10 pr-4 py-2.5 text-sm rounded-xl border border-white/10 bg-white/5 text-white placeholder-slate-500 focus:ring-2 focus:ring-violet-500 focus:border-transparent outline-none transition"
+          />
+        </div>
+        <button onClick={() => handleSearch()}
+          className="flex items-center gap-2 bg-violet-600 hover:bg-violet-500 text-white text-sm font-semibold px-5 py-2.5 rounded-xl transition-all whitespace-nowrap">
+          {success
+            ? <><Ico d={I.check} className="w-4 h-4" />Searching…</>
+            : <><Ico d={I.search} className="w-4 h-4" />Search</>}
+        </button>
+        <button onClick={() => setShowF(v => !v)}
+          className={`flex items-center gap-1.5 text-sm px-4 py-2.5 rounded-xl border transition ${
+            showF ? "bg-violet-500/15 border-violet-500/30 text-violet-300" : "border-white/10 text-slate-400 hover:border-white/20"
+          }`}>
+          <Ico d={I.filter} className="w-4 h-4" /> Filters
+        </button>
       </div>
 
-      {error && (
-        <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
-          <div className="flex items-start">
-            <AlertCircle />
-            <div className="flex-1 ml-2">
-              <span className="text-red-800 font-medium block">Error</span>
-              <p className="text-red-700 mt-1 text-sm">{error}</p>
-              <button onClick={() => setError(null)} className="mt-2 text-red-600 hover:text-red-800 transition-colors text-sm">
-                Dismiss
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Error */}
+      {error && <p className="text-xs text-red-400">{error}</p>}
 
-      {success && (
-        <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-4">
-          <div className="flex items-start">
-            <CheckCircle />
-            <span className="text-green-800 font-medium ml-2">{success}</span>
-          </div>
-        </div>
-      )}
-
-      <div className="space-y-4">
-        {/* Main Search Fields */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      {/* Filters */}
+      {showF && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-3 border-t border-white/5">
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-              Job Title or Keywords <span className="text-red-500">*</span>
+            <label className="block text-xs font-medium text-slate-500 mb-1.5">Experience</label>
+            <select value={localF.experienceLevel}
+              onChange={e => setLocalF(f => ({ ...f, experienceLevel: e.target.value }))}
+              className={sel}>
+              <option value="">Any Level</option>
+              <option value="entry">Entry Level</option>
+              <option value="mid">Mid Level</option>
+              <option value="senior">Senior</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1.5">Min Match %</label>
+            <select value={localF.minMatchScore}
+              onChange={e => setLocalF(f => ({ ...f, minMatchScore: Number(e.target.value) }))}
+              className={sel}>
+              {[20, 40, 60, 80].map(v => <option key={v} value={v}>{v}%</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1.5">Posted Within</label>
+            <select value={localF.postedWithinDays}
+              onChange={e => setLocalF(f => ({ ...f, postedWithinDays: Number(e.target.value) }))}
+              className={sel}>
+              {[7, 14, 30, 90].map(d => <option key={d} value={d}>{d} days</option>)}
+            </select>
+          </div>
+          <div className="flex items-end pb-0.5">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={localF.excludeRemote}
+                onChange={e => setLocalF(f => ({ ...f, excludeRemote: e.target.checked }))}
+                className="w-4 h-4 rounded border-white/20 bg-white/5 text-violet-500 focus:ring-violet-500" />
+              <span className="text-sm text-slate-400">Exclude Remote</span>
             </label>
-            <div className="relative">
-              <input
-                type="text"
-                placeholder="e.g. Software Engineer, Data Scientist"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                onKeyPress={handleKeyPress}
-                className="w-full px-4 py-3 pl-10 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500"
-                disabled={loading}
-              />
-              <SearchIcon size="h-5 w-5 absolute left-3 top-3.5 text-gray-400" />
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Location</label>
-            <div className="relative">
-              <input
-                type="text"
-                placeholder="e.g. India, Bangalore, Mumbai"
-                value={location}
-                onChange={(e) => setLocation(e.target.value)}
-                onKeyPress={handleKeyPress}
-                className="w-full px-4 py-3 pl-10 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500"
-                disabled={loading}
-              />
-              <svg className="absolute left-3 top-3.5 h-5 w-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
-              </svg>
-            </div>
           </div>
         </div>
+      )}
 
-        {/* Advanced Filters */}
-        <div className="mt-4 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600">
-          <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">🔍 Advanced Filters</p>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div>
-              <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Experience Level</label>
-              <select
-                value={localFilters.experienceLevel}
-                onChange={(e) => handleFilterChange('experienceLevel', e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm focus:ring-2 focus:ring-green-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-              >
-                <option value="">All Levels</option>
-                <option value="entry">Entry Level</option>
-                <option value="mid">Mid Level</option>
-                <option value="senior">Senior Level</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Min Match Score (%)</label>
-              <input
-                type="number"
-                min="0"
-                max="100"
-                value={localFilters.minMatchScore}
-                onChange={(e) => handleFilterChange('minMatchScore', Number(e.target.value))}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm focus:ring-2 focus:ring-green-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Posted Within</label>
-              <select
-                value={localFilters.postedWithinDays}
-                onChange={(e) => handleFilterChange('postedWithinDays', Number(e.target.value))}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-sm focus:ring-2 focus:ring-green-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-              >
-                <option value="7">Last 7 Days</option>
-                <option value="14">Last 14 Days</option>
-                <option value="30">Last 30 Days</option>
-                <option value="60">Last 60 Days</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Remote Jobs</label>
-              <label className="flex items-center mt-2">
-                <input
-                  type="checkbox"
-                  checked={localFilters.excludeRemote}
-                  onChange={(e) => handleFilterChange('excludeRemote', e.target.checked)}
-                  className="w-4 h-4 text-green-600 border-gray-300 rounded focus:ring-green-500"
-                />
-                <span className="ml-2 text-sm text-gray-700">Exclude Remote</span>
-              </label>
-            </div>
-          </div>
-        </div>
-
-        {/* Action Buttons */}
-        <div className="flex gap-3">
-          <button
-            onClick={() => handleSearch()}
-            disabled={loading || !query.trim()}
-            className="flex-1 md:flex-none bg-gradient-to-r from-green-600 to-green-700 text-white py-3 px-8 rounded-lg font-semibold hover:from-green-700 hover:to-green-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-md hover:shadow-lg"
-          >
-            {loading ? (
-              <>
-                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2 inline-block"></div>
-                Searching...
-              </>
-            ) : (
-              <>
-                <SearchIcon size="h-5 w-5 inline mr-2" />
-                Search Jobs
-              </>
-            )}
-          </button>
-
-          <button
-            onClick={() => {
-              setQuery("");
-              setLocation("India");
-              setError(null);
-              setSuccess(null);
-              setLocalFilters({
-                experienceLevel: '',
-                minMatchScore: 40,
-                postedWithinDays: 14,
-                excludeRemote: false
-              });
-            }}
-            disabled={loading}
-            className="px-6 py-3 border-2 border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors font-medium"
-          >
-            Clear
-          </button>
-        </div>
-
-        {/* Popular Searches */}
-        <div className="mt-6 pt-6 border-t border-gray-200 dark:border-gray-700">
-          <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Popular Searches:</p>
-          <div className="flex flex-wrap gap-2">
-            {popularSearches.map((item, idx) => (
-              <button
-                key={idx}
-                onClick={() => handleQuickSearch(item.query, item.location)}
-                disabled={loading}
-                className="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-full text-sm hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors disabled:opacity-50"
-              >
-                {item.query} • {item.location}
-              </button>
-            ))}
-          </div>
+      {/* Popular searches */}
+      <div>
+        <p className="text-xs font-medium text-slate-600 uppercase tracking-widest mb-2">Popular</p>
+        <div className="flex flex-wrap gap-2">
+          {POPULAR.map((p, i) => (
+            <button key={i}
+              onClick={() => { setQuery(p.query); setLocation(p.location); handleSearch(p.query, p.location); }}
+              className="flex items-center gap-1.5 text-xs border border-white/10 text-slate-400 hover:border-violet-500/30 hover:text-violet-300 px-3 py-1.5 rounded-full transition-all">
+              <Ico d={I.brief} className="w-3 h-3" />
+              {p.query} · {p.location}
+            </button>
+          ))}
         </div>
       </div>
     </div>
   );
-};
-
-export default JobSearch;
+}
