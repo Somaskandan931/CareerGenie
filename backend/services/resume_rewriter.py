@@ -42,7 +42,21 @@ def _build_langchain_chain(target_role: str, tone: str):
         template=template,
     )
 
-    # Try Ollama first
+    # Try Groq first (primary when Ollama is not running)
+    if settings.GROQ_API_KEY:
+        try:
+            from langchain_groq import ChatGroq
+            llm = ChatGroq(
+                api_key=settings.GROQ_API_KEY,
+                model=settings.GROQ_CHAT_MODEL,
+                temperature=0.4,
+            )
+            logger.info("LangChain chain using Groq/%s", settings.GROQ_CHAT_MODEL)
+            return LLMChain(llm=llm, prompt=prompt)
+        except Exception as exc:
+            logger.warning("Groq LangChain init failed: %s", exc)
+
+    # Ollama fallback (if running locally)
     try:
         from langchain_community.llms import Ollama
         llm = Ollama(
@@ -50,21 +64,10 @@ def _build_langchain_chain(target_role: str, tone: str):
             model=settings.OLLAMA_LLM_MODEL,
             temperature=0.4,
         )
+        logger.info("LangChain chain using Ollama/%s", settings.OLLAMA_LLM_MODEL)
         return LLMChain(llm=llm, prompt=prompt)
     except Exception as exc:
         logger.warning("Ollama LangChain init failed: %s", exc)
-
-    # Groq fallback
-    try:
-        from langchain_groq import ChatGroq
-        llm = ChatGroq(
-            api_key=settings.GROQ_API_KEY,
-            model=settings.GROQ_CHAT_MODEL,
-            temperature=0.4,
-        )
-        return LLMChain(llm=llm, prompt=prompt)
-    except Exception as exc:
-        logger.warning("Groq LangChain init failed: %s", exc)
 
     return None
 

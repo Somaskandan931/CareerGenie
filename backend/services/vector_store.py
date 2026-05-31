@@ -49,25 +49,29 @@ class VectorStore :
         logger.info( f"Vector store initialized. Current jobs: {self.collection.count()}" )
 
     def _init_embedder ( self ) :
-        """Initialize embedder - Ollama first, then SentenceTransformer fallback"""
-        # Try Ollama first
+        """Initialize embedder — Ollama if running, otherwise SentenceTransformer (no Ollama needed)."""
+        # Try Ollama only if it is reachable
         try :
             from backend.services.ollama_service import get_ollama_service
             ollama_svc = get_ollama_service()
             if ollama_svc.available :
                 logger.info( f"Using Ollama for embeddings (model: {ollama_svc.embedding_model})" )
                 return ollama_svc
+            logger.info( "Ollama not reachable — will use SentenceTransformer" )
         except Exception as e :
-            logger.warning( f"Ollama not available: {e}" )
+            logger.info( f"Ollama skipped ({e}) — will use SentenceTransformer" )
 
-        # Fallback to SentenceTransformer
+        # SentenceTransformer fallback (works without Ollama; ~90 MB download on first run)
         try :
             from sentence_transformers import SentenceTransformer
-            logger.info( f"Falling back to SentenceTransformer model: {settings.EMBEDDING_MODEL}" )
-            return SentenceTransformer( settings.EMBEDDING_MODEL )
+            model_name = getattr( settings, "EMBEDDING_MODEL", "all-MiniLM-L6-v2" )
+            logger.info( f"Loading SentenceTransformer: {model_name}" )
+            return SentenceTransformer( model_name )
         except Exception as e :
             logger.error( f"Failed to load any embedder: {e}" )
-            raise RuntimeError( "No embedding model available. Install Ollama or sentence-transformers" )
+            raise RuntimeError(
+                "No embedding model available — run: pip install sentence-transformers"
+            )
 
     def _get_embedding ( self, text: str ) -> List[float] :
         """Get embedding for a single text"""
@@ -310,5 +314,3 @@ except Exception as e:  # pragma: no cover
         logger.warning("Chroma schema cleanup failed: %s", cleanup_exc)
 
     vector_store = None
-
-
