@@ -355,34 +355,13 @@ async def admin_seed_mock_jobs(
     vs = _require_vector_store()
 
     try:
-        from datetime import datetime
-
+        # FIX: delegate to job_scraper which generates skill-rich descriptions.
+        # The old inline version produced generic text with no skill tokens, so
+        # the matcher always scored 0 and silently dropped every seeded job.
         vs.clear()
-        roles = [
-            f"Senior {query}", f"Junior {query}", f"Lead {query}",
-            f"{query} Specialist", f"{query} Developer", f"Principal {query}",
-            f"{query} Architect", f"{query} Consultant", f"Staff {query}",
-        ]
-        companies = ["Google", "Microsoft", "Amazon", "Apple", "Meta", "Netflix", "Tesla"]
-
-        mock_jobs = [
-            {
-                "id": f"seed_job_{i}",
-                "title": roles[i % len(roles)],
-                "company": companies[i % len(companies)],
-                "location": location,
-                "description": (
-                    f"We are hiring a {roles[i % len(roles)]} at {companies[i % len(companies)]}. "
-                    f"Requirements: Experience in {query}, strong coding skills, team player."
-                ),
-                "apply_link": f"https://example.com/jobs/seed_job_{i}",
-                "posted_at": f"{i + 1} days ago",
-                "employment_type": "Full-time",
-                "days_old": i,
-                "fetched_at": datetime.now().isoformat(),
-            }
-            for i in range(num_jobs)
-        ]
+        mock_jobs = get_job_scraper().fetch_jobs(
+            query=query, location=location, num_jobs=num_jobs,
+        )
 
         indexed = vs.index_jobs(mock_jobs)
         return {
@@ -441,8 +420,17 @@ async def _refresh_jobs(
         matcher = get_job_matcher()
         target_role = job_query.strip() if job_query else matcher._extract_target_role(resume_text)
 
+        # FIX: pass resume_skills so mock descriptions contain the candidate's own
+        # skill tokens, ensuring non-zero overlap scores in the matcher.
+        resume_skills = matcher._extract_skills(resume_text) if resume_text else []
+
         scraper = get_job_scraper()
-        jobs = scraper.fetch_jobs(query=target_role, location=location, num_jobs=num_jobs)
+        jobs = scraper.fetch_jobs(
+            query=target_role,
+            location=location,
+            num_jobs=num_jobs,
+            resume_skills=resume_skills,
+        )
 
         if jobs:
             vs.index_jobs(jobs)

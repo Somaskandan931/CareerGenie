@@ -401,7 +401,7 @@ class LearningToRankEngine:
             return job.get("_features", [0.0] * N_FEATURES)
 
         # Temporarily monkey-patch for training on raw features
-        import services.learning_to_rank as _self_mod
+        from backend.services import learning_to_rank as _self_mod
         _orig = _self_mod.extract_features
         _self_mod.extract_features = _pre_extracted
 

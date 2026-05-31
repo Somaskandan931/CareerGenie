@@ -114,13 +114,15 @@ class JobMatcher:
             personalised = False
             if user_id:
                 try:
-                    from backend.services.ltr_ranker import get_ltr_ranker
-                    ranker = get_ltr_ranker()
-                    ltr_score = ranker.predict(
-                        user_id,
-                        job,
-                        {"semantic": sem_raw, "skills": skill_raw, "title": title_raw_norm},
-                    )
+                    from backend.services.learning_to_rank import get_ltr_engine
+                    ranker = get_ltr_engine()
+                    # Get actual user profile from feedback engine for proper personalisation
+                    try:
+                        from backend.services.feedback_engine import get_feedback_engine
+                        user_profile = get_feedback_engine().get_profile(user_id)
+                    except Exception:
+                        user_profile = None
+                    ltr_score = ranker.score_job(user_id, job, user_profile)
                     personalised = True
                 except Exception as exc:
                     logger.warning("LTR skipped: %s", exc)
@@ -157,7 +159,7 @@ class JobMatcher:
             return {"semantic": 0.35, "skills": 0.45, "title": 0.20}
         try:
             from backend.services.feedback_engine import get_feedback_engine
-            return get_feedback_engine().get_adaptive_weights(user_id)
+            return get_feedback_engine().get_weights(user_id)
         except Exception:
             return {"semantic": 0.35, "skills": 0.45, "title": 0.20}
 
