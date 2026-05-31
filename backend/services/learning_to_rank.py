@@ -50,7 +50,7 @@ logger = logging.getLogger(__name__)
 
 # ── Storage ────────────────────────────────────────────────────────────────────
 try:
-    from core.config import settings as _settings
+    from backend.core.config import settings as _settings
     _DEFAULT_LTR_DIR = _settings.LTR_STORE_DIR
 except Exception:
     _DEFAULT_LTR_DIR = "/tmp/career_genie_ltr"

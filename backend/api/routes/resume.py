@@ -101,9 +101,16 @@ async def parse_resume(file: UploadFile = File(...)):
     _validate_upload(file)
     
     try:
+        # Check Content-Length before buffering into memory
+        if file.size is not None and file.size > MAX_FILE_SIZE_MB * 1024 * 1024:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File exceeds {MAX_FILE_SIZE_MB}MB limit"
+            )
+
         content = await file.read()
-        
-        # Check file size
+
+        # Secondary check for streamed uploads without Content-Length
         if len(content) > MAX_FILE_SIZE_MB * 1024 * 1024:
             raise HTTPException(
                 status_code=400,
@@ -232,7 +239,7 @@ def _generate_hr_panel(
     """Generate HR-style evaluation of a resume."""
     import json
     import re
-    from backend.services.llm import llm_call_sync
+    from backend.core import ai_pipeline
     
     company_ctx = company_type or "mid-size"
     focus_ctx = focus_area or "general"
@@ -277,9 +284,9 @@ questions_to_ask must have exactly {num_questions} items, type must be one of: t
 """
     
     try:
-        raw = llm_call_sync(
-            system="You are an expert HR recruiter AI. Respond with ONLY valid JSON. No markdown, no extra text.",
-            user=prompt,
+        raw = ai_pipeline.call(
+            "You are an expert HR recruiter AI. Respond with ONLY valid JSON. No markdown, no extra text.",
+            prompt,
             temp=0.3,
             max_tokens=2000,
         )

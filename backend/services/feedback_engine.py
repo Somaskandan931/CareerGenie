@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 # ── Storage ────────────────────────────────────────────────────────────────────
 try:
-    from core.config import settings as _settings
+    from backend.core.config import settings as _settings
     _DEFAULT_FEEDBACK_DIR = _settings.FEEDBACK_STORE_DIR
 except Exception:
     _DEFAULT_FEEDBACK_DIR = "/tmp/career_genie_feedback"

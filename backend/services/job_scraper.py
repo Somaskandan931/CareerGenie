@@ -1,5 +1,8 @@
 from typing import List, Dict
-from serpapi import GoogleSearch
+try:
+    from serpapi import GoogleSearch  # pip install serpapi>=0.1.5
+except ImportError:
+    GoogleSearch = None  # job search will fall back to mock data
 import logging
 from datetime import datetime
 import re
@@ -112,6 +115,8 @@ class JobScraper :
         }
 
         try :
+            if GoogleSearch is None:
+                raise ImportError("serpapi package not installed. Run: pip install serpapi>=0.1.5")
             search = GoogleSearch( params )
             results = search.get_dict()
             jobs_results = results.get( "jobs_results", [] )

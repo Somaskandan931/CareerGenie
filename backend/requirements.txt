@@ -1,12 +1,14 @@
 # Core Backend
-fastapi==0.109.0
-uvicorn[standard]==0.27.0
-python-multipart==0.0.6
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9
 
 # HTTP / API Clients
-httpx==0.27.0
-requests==2.31.0
-google-search-results==2.4.2
+httpx>=0.27.0
+requests>=2.31.0
+
+# Job search — use maintained serpapi package (replaces unmaintained google-search-results)
+serpapi>=0.1.5
 
 # ── LLM Providers ─────────────────────────────────────────────────────────────
 # Primary — Groq (ultra-fast, generous free tier)
@@ -19,19 +21,21 @@ anthropic>=0.40.0
 google-genai>=0.8.0
 
 # Vector Database & Embeddings
-chromadb==0.4.22
-sentence-transformers==2.3.1
+# chromadb 0.4.x has a SQLite schema bug; 0.5+ fixes it
+chromadb>=0.5.0,<0.7.0
+sentence-transformers>=2.3.1
 
 # Document Processing
-pdfplumber==0.10.3
-python-docx==1.1.0
+pdfplumber>=0.10.3
+python-docx>=1.1.0
 
 # Data Validation & Config
-pydantic==2.5.3
-python-dotenv==1.0.0
+pydantic>=2.5.3
+pydantic-settings>=2.0.0
+python-dotenv>=1.0.0
 
 # Google Trends
-pytrends==4.9.2
+pytrends>=4.9.2
 
 # Performance
 numpy>=1.24.0

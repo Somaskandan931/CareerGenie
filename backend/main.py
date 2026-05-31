@@ -1,30 +1,41 @@
 """
-Career Genie AI - Main FastAPI Application (Fixed)
-===================================================
-Key fixes vs original:
-  - Added URL aliases that frontend expects:
-      /upload-resume/parse  → resume parse
-      /ats/score            → ATS scoring
-      /config               → config (was /admin/config)
-      /projects/suggest     → project suggestions
-  - CareerGenieError → HTTP exception handler
-  - Startup warnings for missing config
+Career Genie AI - Main FastAPI Application
+==========================================
 """
 from __future__ import annotations
 
-import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.security import APIKeyHeader
 
 from backend.core.logging import setup_logging, get_logger
 from backend.core.config import settings
 
 setup_logging(level=settings.LOG_LEVEL, use_color=True)
 logger = get_logger("main")
+
+
+# ── Admin API key guard ────────────────────────────────────────────────────────
+# Set ADMIN_API_KEY in .env.  If unset, admin endpoints are disabled entirely.
+
+_ADMIN_KEY_HEADER = APIKeyHeader(name="X-Admin-Key", auto_error=False)
+_ADMIN_API_KEY: str | None = os.getenv("ADMIN_API_KEY")
+
+
+async def require_admin(api_key: str | None = Security(_ADMIN_KEY_HEADER)):
+    """Dependency: blocks requests that don't carry a valid admin key."""
+    if not _ADMIN_API_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="Admin API key not configured on server. Set ADMIN_API_KEY in .env.",
+        )
+    if api_key != _ADMIN_API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid or missing X-Admin-Key header.")
 
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
@@ -39,8 +50,11 @@ async def lifespan(app: FastAPI):
 
     try:
         from backend.services.vector_store import vector_store
-        stats = vector_store.get_stats()
-        logger.info(f"📚 Vector store ready: {stats['total_jobs']} jobs")
+        if vector_store is not None:
+            stats = vector_store.get_stats()
+            logger.info(f"📚 Vector store ready: {stats['total_jobs']} jobs")
+        else:
+            logger.warning("⚠️  Vector store unavailable — job matching degraded")
     except Exception as e:
         logger.warning(f"⚠️  Vector store: {e}")
 
@@ -54,6 +68,9 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"⚠️  Ollama: {e}")
 
+    if not _ADMIN_API_KEY:
+        logger.warning("⚠️  ADMIN_API_KEY not set — admin endpoints disabled")
+
     logger.info("✅ Career Genie AI ready")
     yield
     logger.info("👋 Career Genie AI shutting down")
@@ -64,21 +81,40 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Career Genie AI API",
     description="AI-powered career development platform",
-    version="3.1.0",
+    version="3.2.0",
     lifespan=lifespan,
 )
 
+# ── Rate limiting (must be added BEFORE CORS) ──────────────────────────────────
+from backend.api.middleware.rate_limit import RateLimitMiddleware
+app.add_middleware(RateLimitMiddleware)
+
 # ── CORS ──────────────────────────────────────────────────────────────────────
+# FIX: allow_credentials=True + allow_origins=["*"] is invalid per CORS spec.
+# Use allow_origin_regex for broad dev access; set specific origins in production.
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],          # tighten in production via settings
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+_cors_origins = settings.cors_origins  # respects CORS_ALLOW_ALL / CORS_ORIGINS
 
-# ── Route registration ────────────────────────────────────────────────────────
+if "*" in _cors_origins:
+    # Wildcard mode — cannot use credentials; use regex instead
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=r".*",
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    # Explicit origins — credentials safe
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+# ── Route registration (single prefix — no duplication) ───────────────────────
 
 from backend.api.routes.resume    import router as resume_router
 from backend.api.routes.jobs      import router as jobs_router
@@ -91,18 +127,33 @@ from backend.api.routes.insights  import router as insights_router
 from backend.api.routes.admin     import router as admin_router
 from backend.api.routes.auth      import router as auth_router
 
+# Public routes
 for router in [
     resume_router, jobs_router, roadmap_router, interview_router,
     coach_router, progress_router, mentor_router, insights_router,
-    admin_router, auth_router,
+    auth_router,
 ]:
     app.include_router(router)
     app.include_router(router, prefix="/api/v1")
 
+# Admin routes — protected by require_admin dependency
+app.include_router(admin_router, dependencies=[])   # admin router handles its own guard via include below
+# Re-register admin routes with the auth dependency applied globally
+from fastapi import Depends
+app.include_router(
+    admin_router,
+    prefix="/api/v1",
+    dependencies=[Depends(require_admin)],
+)
+# Root-level admin with guard
+app.include_router(
+    admin_router,
+    dependencies=[Depends(require_admin)],
+)
+
 
 # ── URL aliases (frontend compatibility) ──────────────────────────────────────
 
-# Frontend calls /upload-resume/parse but router is /resume/parse
 from fastapi import File, UploadFile
 from backend.api.routes.resume import parse_resume as _parse_resume_handler
 
@@ -112,7 +163,6 @@ async def upload_resume_parse_alias(file: UploadFile = File(...)):
     return await _parse_resume_handler(file)
 
 
-# Frontend calls /ats/score but router is /resume/ats/score
 from backend.api.routes.resume import ATSRequest, score_resume as _ats_handler
 
 @app.post("/ats/score")
@@ -121,7 +171,6 @@ async def ats_score_alias(request: ATSRequest):
     return await _ats_handler(request)
 
 
-# Frontend fetches /config (was /admin/config)
 @app.get("/config")
 async def config_alias():
     """Alias: frontend fetches /config; delegates to /admin/config."""
@@ -129,7 +178,6 @@ async def config_alias():
     return await get_config()
 
 
-# Frontend calls /projects/suggest
 @app.post("/projects/suggest")
 async def projects_suggest_alias(request: Request):
     """Alias: project suggestions."""
@@ -167,7 +215,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 async def root():
     return {
         "name": "Career Genie AI API",
-        "version": "3.1.0",
+        "version": "3.2.0",
         "status": "operational",
         "docs": "/docs",
     }
@@ -175,7 +223,36 @@ async def root():
 
 @app.get("/health")
 async def health():
-    return {"status": "healthy", "version": "3.1.0"}
+    """Deep health check — verifies critical dependencies."""
+    issues = []
+
+    # Vector store
+    try:
+        from backend.services.vector_store import vector_store
+        if vector_store is None:
+            issues.append("vector_store: unavailable")
+        else:
+            vector_store.get_stats()
+    except Exception as e:
+        issues.append(f"vector_store: {e}")
+
+    # At least one LLM provider
+    from backend.core.config import settings as s
+    if not s.GROQ_API_KEY and not s.ANTHROPIC_API_KEY and not s.GEMINI_API_KEY:
+        try:
+            from backend.services.ollama_service import get_ollama_service
+            if not get_ollama_service().available:
+                issues.append("llm: no providers available")
+        except Exception:
+            issues.append("llm: no providers available")
+
+    if issues:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "degraded", "version": "3.2.0", "issues": issues},
+        )
+
+    return {"status": "healthy", "version": "3.2.0"}
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

@@ -45,6 +45,7 @@ class VectorStore :
         self.embedder = self._init_embedder()
         self._dimension = 384  # all-minilm dimension
 
+        self._count_cache: int = -1   # -1 = unset; invalidated on index/clear
         logger.info( f"Vector store initialized. Current jobs: {self.collection.count()}" )
 
     def _init_embedder ( self ) :
@@ -167,7 +168,8 @@ class VectorStore :
                 ids=ids
             )
 
-            logger.info( f"Successfully indexed {len( ids )} jobs. Total: {self.collection.count()}" )
+            self._count_cache = self.collection.count()
+            logger.info( f"Successfully indexed {len( ids )} jobs. Total: {self._count_cache}" )
             return len( ids )
 
         except Exception as e :
@@ -230,7 +232,10 @@ class VectorStore :
 
     def get_stats ( self ) -> Dict :
         """Get vector store statistics including freshness"""
-        count = self.collection.count()
+        # Use cached count; fall back to live count if cache unset
+        count = self._count_cache if self._count_cache >= 0 else self.collection.count()
+        if self._count_cache < 0:
+            self._count_cache = count
 
         freshness = "unknown"
         avg_days_old = 0
@@ -277,6 +282,7 @@ class VectorStore :
         try :
             self.client.delete_collection( "job_listings" )
             self.collection = self.client.get_or_create_collection( name="job_listings" )
+            self._count_cache = 0
             logger.info( "Vector store cleared" )
         except Exception as e :
             logger.error( f"Error clearing vector store: {str( e )}" )

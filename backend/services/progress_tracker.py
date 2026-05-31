@@ -23,7 +23,11 @@ from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-_STORE_DIR = Path(os.getenv("PROGRESS_STORE_DIR", "/tmp/career_genie_progress"))
+try:
+    from backend.core.config import settings as _pt_settings
+    _STORE_DIR = Path(_pt_settings.PROGRESS_STORE_DIR)
+except Exception:
+    _STORE_DIR = Path(os.getenv("PROGRESS_STORE_DIR", "/tmp/career_genie_progress"))
 _STORE_DIR.mkdir(parents=True, exist_ok=True)
 
 

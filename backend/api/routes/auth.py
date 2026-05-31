@@ -1,13 +1,17 @@
 """
 Auth API Routes
 ===============
-Authentication endpoints (placeholder for future implementation).
+Authentication endpoints — placeholder stubs that return HTTP 501.
+
+These endpoints exist so the frontend and /docs don't 404, but they do NOT
+issue real tokens.  Replace this file with a real JWT + DB implementation
+before any user-facing deployment.
 """
 
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Depends
-from pydantic import BaseModel, EmailStr
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
 from backend.core.logging import get_logger
 
@@ -39,67 +43,46 @@ class UserResponse(BaseModel):
     is_active: bool = True
 
 
-@router.post("/login", response_model=TokenResponse)
+_NOT_IMPLEMENTED = {
+    "error": "not_implemented",
+    "message": (
+        "Authentication is not yet implemented. "
+        "Add JWT + database integration before using in production."
+    ),
+}
+
+
+@router.post("/login")
 async def login(request: LoginRequest):
     """
     Authenticate user and return access token.
-    
-    NOTE: This is a placeholder. Full authentication implementation
-    should be added with proper password hashing, JWT tokens, and
-    database integration.
+
+    NOT IMPLEMENTED — returns 501.
+    Implement: password hash verification, JWT generation, DB user lookup.
     """
-    # TODO: Implement proper authentication
-    # - Hash password verification
-    # - JWT token generation
-    # - Database user lookup
-    
-    logger.warning("Authentication endpoint called but not fully implemented")
-    
-    # Return placeholder token
-    return TokenResponse(
-        access_token="placeholder_token_implementation_required",
-        token_type="bearer",
-    )
+    logger.warning("Login endpoint called — not implemented")
+    raise HTTPException(status_code=501, detail=_NOT_IMPLEMENTED)
 
 
-@router.post("/register", response_model=UserResponse)
+@router.post("/register")
 async def register(request: RegisterRequest):
     """
     Register a new user.
-    
-    NOTE: This is a placeholder. Full registration implementation
-    should be added with proper password hashing and database storage.
+
+    NOT IMPLEMENTED — returns 501.
+    Implement: password hashing, email validation, DB user creation.
     """
-    # TODO: Implement proper registration
-    # - Password hashing
-    # - Email validation
-    # - Database user creation
-    
-    logger.warning("Registration endpoint called but not fully implemented")
-    
-    return UserResponse(
-        id="placeholder_user_id",
-        email=request.email,
-        full_name=request.full_name,
-    )
+    logger.warning("Register endpoint called — not implemented")
+    raise HTTPException(status_code=501, detail=_NOT_IMPLEMENTED)
 
 
-@router.get("/me", response_model=UserResponse)
+@router.get("/me")
 async def get_current_user():
     """
     Get current authenticated user.
-    
-    NOTE: This is a placeholder. Full implementation should validate
-    JWT token and return user from database.
+
+    NOT IMPLEMENTED — returns 501.
+    Implement: JWT token validation, DB user lookup.
     """
-    # TODO: Implement proper user retrieval
-    # - JWT token validation
-    # - Database user lookup
-    
-    logger.warning("User endpoint called but not fully implemented")
-    
-    return UserResponse(
-        id="placeholder_user_id",
-        email="placeholder@example.com",
-        full_name="Placeholder User",
-    )
+    logger.warning("Get current user endpoint called — not implemented")
+    raise HTTPException(status_code=501, detail=_NOT_IMPLEMENTED)
