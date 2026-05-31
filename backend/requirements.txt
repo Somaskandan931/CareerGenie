@@ -5,38 +5,46 @@ python-multipart>=0.0.9
 
 # HTTP / API Clients
 httpx>=0.27.0
-requests>=2.31.0
+requests>=2.32.5
 
-# Job search — use maintained serpapi package (replaces unmaintained google-search-results)
+# Job search
 serpapi>=0.1.5
 
 # ── LLM Providers ─────────────────────────────────────────────────────────────
-# Primary — Groq (ultra-fast, generous free tier)
-groq>=0.9.0
+# Groq — pinned <1.0.0 to stay compatible with langchain-groq
+groq>=0.30.0,<1.0.0
 
-# Secondary — Anthropic (most reliable fallback)
+# Anthropic
 anthropic>=0.40.0
 
-# Tertiary — Gemini (final fallback)
-google-genai>=0.8.0
+# Gemini
+google-genai>=1.2.0
 
-# Vector Database & Embeddings
-# chromadb 0.4.x has a SQLite schema bug; 0.5+ fixes it
+# ── LangChain ─────────────────────────────────────────────────────────────────
+langchain>=0.3.0
+langchain-community>=0.3.0
+langchain-groq>=0.2.0
+langgraph>=0.2.0
+
+# ── Vector Database & Embeddings ──────────────────────────────────────────────
 chromadb>=0.5.0,<0.7.0
 sentence-transformers>=2.3.1
 
-# Document Processing
+# ── Document Processing ───────────────────────────────────────────────────────
 pdfplumber>=0.10.3
 python-docx>=1.1.0
 
-# Data Validation & Config
-pydantic>=2.5.3
-pydantic-settings>=2.0.0
+# ── Data Validation & Config ──────────────────────────────────────────────────
+pydantic>=2.7.4
+pydantic-settings>=2.3.0
 python-dotenv>=1.0.0
 
-# Google Trends
+# ── Google Trends ─────────────────────────────────────────────────────────────
 pytrends>=4.9.2
 
-# Performance
+# ── WebSockets (langsmith requires >=15.0) ────────────────────────────────────
+websockets>=15.0
+
+# ── Performance ───────────────────────────────────────────────────────────────
 numpy>=1.24.0
 scikit-learn>=1.3.0
