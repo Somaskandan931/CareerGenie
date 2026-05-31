@@ -43,7 +43,11 @@ export default function HomePage({ resumeText, careerAdvice, onNavigate }) {
   useEffect(() => {
     fetch(`${API_BASE_URL}/health`)
       .then(r => r.json())
-      .then(d => setApiStatus(d.status === "healthy" ? "online" : "degraded"))
+      .then(d => {
+        if (d.status === "healthy") setApiStatus("online");
+        else if (d.status === "degraded") setApiStatus("degraded");
+        else setApiStatus("offline");
+      })
       .catch(() => setApiStatus("offline"));
   }, []);
 
