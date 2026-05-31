@@ -1,3 +1,4 @@
+
 <div align="center">
 
 ```
@@ -9,7 +10,7 @@
  ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝╚═╝  ╚═╝     ╚═════╝ ╚══════╝╚═╝  ╚════╝╚═╝╚══════╝
 ```
 
-**From resume to offer — in one pipeline.**
+**AI-powered career intelligence platform for resume optimisation, semantic job matching, interview preparation, and adaptive career guidance.**
 
 Semantic job matching · ATS scoring · LangChain resume rewriting · LangGraph career analysis · Mock interviews · Adaptive personalisation · Runs locally with Ollama.
 
@@ -28,32 +29,37 @@ Semantic job matching · ATS scoring · LangChain resume rewriting · LangGraph 
 
 ## The Problem
 
-Job seekers today navigate a fragmented landscape: one tool shows listings, another grades resumes, a third offers generic interview tips — and **none of these systems talk to each other or adapt to the individual.**
+Modern job seekers use disconnected tools for resume optimisation, job discovery, interview preparation, and skill development. These systems rarely share context with one another, leading to fragmented workflows and generic recommendations.
 
-A fresh graduate in Tamil Nadu applying for a software role has no unified way to understand their skill gaps, find semantically relevant jobs, prepare for interviews, and track their progress toward an offer.
+A candidate may improve their resume in one platform, search for jobs in another, and practise interviews elsewhere — without any system understanding their complete career profile, evolving strengths, or long-term goals.
 
-**Career Genie solves this** by connecting every stage of the job search into a single coherent pipeline — personalised, confidence-validated, and fully runnable on your local machine.
+Career Genie addresses this by creating a unified AI-driven career pipeline that connects resume analysis, semantic job retrieval, adaptive recommendations, interview coaching, and personalised learning into a single continuously improving system.
 
 ---
 
 ## What It Does
 
-```
-Upload Resume → Parse → ATS Score → Gap Analysis → Semantic Job Match
-     ↓                                                      ↓
-Rewrite Resume                                    Learning Roadmap
-(LangChain)                                      Portfolio Projects
-     ↓                                                      ↓
-Mock Interview ←──────── HR Panel Simulation ──────→ Progress Tracker
-     ↓
-Multi-Agent Debate → Confidence-Gated Output → User
+```text
+Resume Upload
+      ↓
+ATS Analysis + Skill Extraction
+      ↓
+Semantic Job Matching
+      ↓
+Gap Analysis
+      ↓
+Resume Rewriting + Portfolio Suggestions
+      ↓
+Learning Roadmap + Interview Preparation
+      ↓
+Adaptive Feedback Loop + Progress Tracking
 ```
 
 ---
 
 ## Feature Overview
 
-### 🎯 Core Intelligence
+### Core Intelligence
 
 | Feature | Description |
 |---|---|
@@ -62,7 +68,7 @@ Multi-Agent Debate → Confidence-Gated Output → User
 | **Resume Rewriter** | LangChain `PromptTemplate + LLMChain` pipeline — action verbs, quantified achievements, ATS-friendly formatting; generates before/after bullet comparisons and a changes summary |
 | **LangGraph Deep Analysis** | 4-node `StateGraph`: `parse_resume → gap_analysis → generate_roadmap → suggest_projects`; each node receives full accumulated state from all previous nodes |
 
-### 🔍 Job Intelligence
+### Job Intelligence
 
 | Feature | Description |
 |---|---|
@@ -73,7 +79,7 @@ Multi-Agent Debate → Confidence-Gated Output → User
 | **Live Job Listings** | Fetches from Google Jobs via SerpAPI; MD5-keyed 5-minute in-memory cache reduces redundant API calls |
 | **Employer Job Posting** | Employers post directly into ChromaDB via `/jobs/post`; listings appear immediately and match semantically like any other posting |
 
-### 🤖 AI Coaching
+### AI Coaching
 
 | Feature | Description |
 |---|---|
@@ -83,18 +89,17 @@ Multi-Agent Debate → Confidence-Gated Output → User
 | **Live Interview Sessions** | WebRTC-based real-time mock interviews with WebSocket signalling; VideoPanel and LiveFeedback components deliver in-session coaching |
 | **HR Recruiter Simulation** | Simulates a full panel: hire verdict, 5 dimension scores, green/red flags, interview questions, salary bracket estimate, internal recruiter notes |
 
-### 🧠 Advanced Systems
+### Advanced Systems
 
 | Feature | Description |
 |---|---|
-| **Multi-Agent Debate** | Propose → Critique → Synthesise → Reflect loop using five typed agents; reduces hallucination and surfaces trade-offs before output is shown |
-| **Confidence-Gated Validation** | Every output passes through a typed validator with 4 confidence tiers (high / medium / low / unreliable); low-confidence outputs are flagged or retried, never silently served |
+| **Multi-Agent Debate** | Propose → Critique → Synthesise → Reflect loop using five typed agents; improves reasoning quality and surfaces trade-offs |
+| **Confidence-Gated Validation** | Every output passes through a typed validator with 4 confidence tiers (high / medium / low / unreliable); low-confidence outputs trigger retries or flags |
 | **Learning Roadmap** | Week-by-week phased learning plan from skill gaps with verified resource URLs injected from an internal database |
 | **Portfolio Projects** | Tailored real-world project suggestions with tech stack, learning outcomes, and recruiter impact statement |
 | **Market Insights** | Google Trends data for up to 10 skill keywords with 6-hour cache; LLM analysis of market demand and salary trends |
 | **Progress Tracker** | DSA problems, roadmap tasks, portfolio projects, and interview pipeline with streak, skill velocity, and retention risk metrics per user |
 | **Expert Mentors** | Browse and book sessions with industry professionals matched to your skill gaps |
-| **TN SkillBridge Analytics** | NSQF-aligned skill taxonomy for Tamil Nadu's automotive sector; batch analytics for institutions tracking student/worker readiness across 7 job roles |
 
 ---
 
@@ -123,6 +128,79 @@ Multi-Agent Debate → Confidence-Gated Output → User
 |---|---|
 | React 18 | UI framework |
 | Tailwind CSS | Styling |
+
+---
+
+## System Architecture
+
+Career Genie follows a modular AI-service architecture built around retrieval, orchestration, and adaptive feedback systems.
+
+### Core Pipeline
+
+```text
+Frontend (React)
+       ↓
+FastAPI Gateway
+       ↓
+Resume Processing Layer
+       ├── Resume Parser
+       ├── ATS Scorer
+       ├── Skill Extractor
+       └── Resume Rewriter
+       ↓
+AI Intelligence Layer
+       ├── LangChain Pipelines
+       ├── LangGraph Career Flow
+       ├── Multi-Agent Orchestrator
+       └── Interview Evaluation Engine
+       ↓
+Retrieval + Ranking Layer
+       ├── ChromaDB Vector Store
+       ├── Semantic Job Matcher
+       ├── Learning-to-Rank Engine
+       └── Feedback Adaptation System
+       ↓
+Output Services
+       ├── Job Recommendations
+       ├── Learning Roadmaps
+       ├── Portfolio Projects
+       ├── Interview Coaching
+       └── Progress Analytics
+```
+
+### Design Characteristics
+
+* Modular service-oriented backend
+* Local-first LLM inference using Ollama
+* Retrieval-augmented semantic job search
+* Adaptive ranking using user feedback
+* Extensible LangGraph workflow pipelines
+* Cloud fallback support for reliability
+* Vector-based retrieval with persistent embeddings
+
+---
+
+## Key Innovations
+
+### Adaptive Job Matching
+
+Career Genie combines semantic similarity, skill overlap analysis, and personalised ranking signals to improve recommendations over time using recorded user feedback.
+
+### LangGraph-Based Career Workflow
+
+The platform uses a structured multi-stage LangGraph pipeline where each stage builds upon accumulated analysis state, enabling more contextual recommendations.
+
+### Multi-Agent Recommendation System
+
+Instead of relying on a single generation step, the platform supports proposer–critic style reasoning workflows for more balanced career guidance.
+
+### Local-First AI Architecture
+
+The system is designed to run primarily on Ollama, reducing dependence on cloud APIs and improving privacy for users and institutions.
+
+### Unified Career Pipeline
+
+Resume analysis, job matching, interview preparation, roadmap generation, and progress tracking are integrated into a single workflow rather than isolated tools.
 
 ---
 
@@ -263,6 +341,39 @@ curl http://localhost:8000/
 
 ---
 
+## Deployment
+
+### Local Deployment
+
+Career Genie is designed to run fully locally using Ollama.
+
+```bash
+Frontend  → React + Tailwind
+Backend   → FastAPI
+LLM Layer → Ollama
+Vector DB → ChromaDB
+```
+
+### Cloud-Compatible Deployment
+
+The architecture also supports cloud deployment:
+
+* Frontend → Netlify / Vercel
+* Backend → Render / Railway / Azure
+* Vector Storage → Persistent Docker volume
+* LLM Fallbacks → Groq / Gemini / Anthropic
+
+### Docker Support
+
+The system is container-ready and can be deployed using Docker Compose with separate services for:
+
+* frontend
+* backend
+* ollama
+* chromadb
+
+---
+
 ## Environment Variables
 
 | Variable | Required | Default | Description |
@@ -329,38 +440,44 @@ A `PromptTemplate` with three input variables (`resume_text`, `target_role`, `to
 Each node receives the full accumulated state. The graph is built lazily at request time.
 
 ### Multi-Agent Debate
-Three independent proposers generate career recommendations. A critic agent attacks each. A synthesiser produces a final output from the surviving arguments. A reflector checks for internal consistency. The approach reduces hallucination and surfaces trade-offs the user would otherwise never see.
+Three independent proposers generate career recommendations. A critic agent attacks each. A synthesiser produces a final output from the surviving arguments. A reflector checks for internal consistency. The approach improves reasoning quality and helps surface trade-offs.
 
 ### Confidence-Gated Output
-Every module output passes through a typed validator before being returned. Four tiers: **high / medium / low / unreliable**. Low-confidence outputs are flagged or retried. The consistency checker cross-validates ATS score vs advisor output vs job match scores — catching cases where one module is an outlier.
+Every module output passes through a typed validator before being returned. Four tiers: **high / medium / low / unreliable**. Low-confidence outputs trigger retries or explicit flags before being shown to users.
 
 ### Adaptive Personalisation Loop
 Feedback signals (apply click, save, dismiss, offer received, and 5 others) update per-user EMA scoring weights. Every 20 new pairwise preference signals, the BPR SGD ranking model retrains. Population weights (all users) blend 60/40 with per-user weights — new users get good rankings immediately.
 
 ---
 
-## Novelty
+## Screenshots
 
-Most career tools are point solutions. The few that combine features (Jobscan, Resume Worded) use static keyword matching — they don't use your actual resume to semantically retrieve jobs, adapt to your feedback, or connect resume analysis to interview prep to learning roadmaps.
+| Dashboard | Resume Analysis | Job Matching |
+|---|---|---|
+| Add screenshot | Add screenshot | Add screenshot |
 
-Career Genie is different in four specific ways:
+| Mock Interview | Learning Roadmap | Progress Tracker |
+|---|---|---|
+| Add screenshot | Add screenshot | Add screenshot |
 
-**Adaptive personalisation loop** — The combination of a feedback signal engine (EMA weight updates) and a pairwise BPR ranking model means job matching improves with every interaction. No comparable free or open-source career tool claims this.
+---
 
-**Real LangChain + LangGraph integration** — The rewriter uses `PromptTemplate + LLMChain`; the deep analysis is a real `StateGraph` where each node's output grounds the next. Swapping the underlying LLM requires no business logic changes.
+## Future Work
 
-**Multi-agent debate for career advice** — Three proposers, one critic, one synthesiser — borrowed from AI safety alignment research and applied to career decision-making. Surfaces trade-offs a single LLM call never would.
-
-**Confidence-gated output validation** — The system knows when it doesn't know. Low-confidence outputs are flagged or retried, not silently served. This is a specific gap in existing AI career tools.
-
-**Fully local by default** — Zero cloud API calls required when running Ollama. Relevant for users and institutions with data privacy concerns or unreliable internet — specifically targeting the Tamil Nadu institutional use case.
+* Fine-tuned ranking models using larger interaction datasets
+* Real-time collaborative mentor sessions
+* Institution-level analytics dashboards
+* Voice-based mock interview evaluation
+* Resume version tracking and optimisation history
+* Multi-language support for regional users
+* Reinforcement-learning-based recommendation tuning
 
 ---
 
 ## Scalability
 
 - **Stateless backend** — all state lives in ChromaDB, per-user JSON files, or the LTR store. Multiple instances can run behind a load balancer; swap JSON for Redis for atomic writes under concurrency.
-- **Vector retrieval** — ChromaDB handles millions of vectors with sub-second retrieval. Batch upserts (32 docs/batch) prevent memory spikes.
+- **Vector retrieval** — The retrieval layer is designed to support scalable semantic search using persistent vector embeddings and batched indexing.
 - **LLM waterfall** — if Ollama is saturated under concurrent load, requests automatically cascade to Groq → Anthropic → Gemini.
 - **LTR model** — the 12-feature linear BPR model trains on 200 preference pairs in under 100ms.
 - **LangGraph** — the current 4-node linear graph extends to conditional branching (e.g. skip roadmap if gaps are empty) without touching node implementations.
