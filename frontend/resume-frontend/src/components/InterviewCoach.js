@@ -141,7 +141,7 @@ const AILiveInterviewModal = ({ config, onClose }) => {
 
   const [phase, setPhase]           = useState("loading"); // loading|qa|done
   const [sessionId, setSessionId]   = useState(null);
-  const [_question, setQuestion]    = useState("");
+  const [, setQuestion]             = useState("");
   const [qIndex, setQIndex]         = useState(0);
   const [totalQ, setTotalQ]         = useState(config.numQ);
   const [transcript, setTranscript] = useState("");

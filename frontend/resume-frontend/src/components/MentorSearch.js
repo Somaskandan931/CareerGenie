@@ -37,7 +37,6 @@ const StarRating = ({ rating }) => {
 
 const MentorCard = ({ mentor, onBook }) => {
   const [expanded, setExpanded] = useState(false);
-  const id = mentor.mentor_id || mentor.id;
 
   return (
     <div className="rounded-2xl border border-white/8 overflow-hidden transition-all hover:border-violet-500/25"
