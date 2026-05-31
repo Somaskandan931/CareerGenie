@@ -107,3 +107,7 @@ docker-compose.override.yml
 
 # Local Netlify folder
 .netlify
+.env
+*.env
+backend/.env
+frontend/resume-frontend/.env
