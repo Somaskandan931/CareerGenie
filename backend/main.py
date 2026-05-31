@@ -8,6 +8,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
+# ✅ CREATE FASTAPI APP EARLY (before heavy imports)
 from fastapi import FastAPI, Request, HTTPException, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -19,24 +20,9 @@ from backend.core.config import settings
 setup_logging(level=settings.LOG_LEVEL, use_color=True)
 logger = get_logger("main")
 
-
-# ── Admin API key guard ────────────────────────────────────────────────────────
-# Set ADMIN_API_KEY in .env.  If unset, admin endpoints are disabled entirely.
-
+# Admin API key guard
 _ADMIN_KEY_HEADER = APIKeyHeader(name="X-Admin-Key", auto_error=False)
 _ADMIN_API_KEY: str | None = os.getenv("ADMIN_API_KEY")
-
-
-async def require_admin(api_key: str | None = Security(_ADMIN_KEY_HEADER)):
-    """Dependency: blocks requests that don't carry a valid admin key."""
-    if not _ADMIN_API_KEY:
-        raise HTTPException(
-            status_code=503,
-            detail="Admin API key not configured on server. Set ADMIN_API_KEY in .env.",
-        )
-    if api_key != _ADMIN_API_KEY:
-        raise HTTPException(status_code=403, detail="Invalid or missing X-Admin-Key header.")
-
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
 
@@ -48,6 +34,7 @@ async def lifespan(app: FastAPI):
     for warning in settings.validate_config():
         logger.warning(f"⚠️  {warning}")
 
+    # Lazy import to avoid loading at module level
     try:
         from backend.services.vector_store import vector_store
         if vector_store is not None:
@@ -76,6 +63,17 @@ async def lifespan(app: FastAPI):
     logger.info("👋 Career Genie AI shutting down")
 
 
+async def require_admin(api_key: str | None = Security(_ADMIN_KEY_HEADER)):
+    """Dependency: blocks requests that don't carry a valid admin key."""
+    if not _ADMIN_API_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="Admin API key not configured on server. Set ADMIN_API_KEY in .env.",
+        )
+    if api_key != _ADMIN_API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid or missing X-Admin-Key header.")
+
+
 # ── App ───────────────────────────────────────────────────────────────────────
 
 app = FastAPI(
@@ -90,13 +88,9 @@ from backend.api.middleware.rate_limit import RateLimitMiddleware
 app.add_middleware(RateLimitMiddleware)
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
-# FIX: allow_credentials=True + allow_origins=["*"] is invalid per CORS spec.
-# Use allow_origin_regex for broad dev access; set specific origins in production.
-
-_cors_origins = settings.cors_origins  # respects CORS_ALLOW_ALL / CORS_ORIGINS
+_cors_origins = settings.cors_origins
 
 if "*" in _cors_origins:
-    # Wildcard mode — cannot use credentials; use regex instead
     app.add_middleware(
         CORSMiddleware,
         allow_origin_regex=r".*",
@@ -105,7 +99,6 @@ if "*" in _cors_origins:
         allow_headers=["*"],
     )
 else:
-    # Explicit origins — credentials safe
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_cors_origins,
@@ -114,7 +107,7 @@ else:
         allow_headers=["*"],
     )
 
-# ── Route registration (single prefix — no duplication) ───────────────────────
+# ── Route registration (imported AFTER app creation) ───────────────────────
 
 from backend.api.routes.resume    import router as resume_router
 from backend.api.routes.jobs      import router as jobs_router
@@ -137,15 +130,13 @@ for router in [
     app.include_router(router, prefix="/api/v1")
 
 # Admin routes — protected by require_admin dependency
-app.include_router(admin_router, dependencies=[])   # admin router handles its own guard via include below
-# Re-register admin routes with the auth dependency applied globally
+app.include_router(admin_router, dependencies=[])
 from fastapi import Depends
 app.include_router(
     admin_router,
     prefix="/api/v1",
     dependencies=[Depends(require_admin)],
 )
-# Root-level admin with guard
 app.include_router(
     admin_router,
     dependencies=[Depends(require_admin)],
@@ -226,7 +217,7 @@ async def health():
     """Deep health check — verifies critical dependencies."""
     issues = []
 
-    # Vector store
+    # Vector store (lazy loaded)
     try:
         from backend.services.vector_store import vector_store
         if vector_store is None:
@@ -259,4 +250,4 @@ async def health():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=False)  # reload=False for production

@@ -18,7 +18,7 @@ logger = logging.getLogger( __name__ )
 
 class VectorStore :
     def __init__ ( self ) :
-        """Initialize ChromaDB and embedding model (Ollama first, fallback to SentenceTransformer)"""
+        """Initialize ChromaDB with lazy embedding loading"""
         # Ensure directory exists
         persist_dir = Path( settings.CHROMA_PERSIST_DIR )
         persist_dir.mkdir( parents=True, exist_ok=True )
@@ -41,40 +41,72 @@ class VectorStore :
             metadata={"description" : "Job listings for RAG matching"}
         )
 
-        # Load embedding model - try Ollama first
-        self.embedder = self._init_embedder()
-        self._dimension = 384  # all-minilm dimension
+        # Lazy-loaded embedder
+        self.embedder = None
+        self._dimension = 384  # TF-IDF max features dimension
+        self._embedder_initialized = False
+        self._use_tfidf = True  # Use TF-IDF on Render (memory efficient)
 
-        self._count_cache: int = -1   # -1 = unset; invalidated on index/clear
         logger.info( f"Vector store initialized. Current jobs: {self.collection.count()}" )
 
+    def _ensure_embedder ( self ) :
+        """Load embedding model only when first needed. Prevents Render startup OOM."""
+        if not self._embedder_initialized :
+            logger.info( "Lazy-loading embedding model..." )
+            self.embedder = self._init_embedder()
+            self._embedder_initialized = True
+
     def _init_embedder ( self ) :
-        """Initialize embedder — Ollama if running, otherwise SentenceTransformer (no Ollama needed)."""
-        # Try Ollama only if it is reachable
+        """
+        Initialize embedder - use TF-IDF for Render (memory efficient),
+        or try Ollama/SentenceTransformer if available.
+        """
+        # Check if we're on Render (memory constrained)
+        is_render = os.environ.get( "RENDER", "" ).lower() == "true"
+
+        if is_render or self._use_tfidf :
+            logger.warning( "Using lightweight TF-IDF embeddings (Render/constrained mode)" )
+            from sklearn.feature_extraction.text import TfidfVectorizer
+            return TfidfVectorizer(
+                max_features=self._dimension,
+                stop_words="english",
+                lowercase=True,
+                strip_accents="unicode"
+            )
+
+        # Try Ollama first (lightweight if available)
         try :
             from backend.services.ollama_service import get_ollama_service
             ollama_svc = get_ollama_service()
             if ollama_svc.available :
                 logger.info( f"Using Ollama for embeddings (model: {ollama_svc.embedding_model})" )
+                self._use_tfidf = False
                 return ollama_svc
             logger.info( "Ollama not reachable — will use SentenceTransformer" )
         except Exception as e :
             logger.info( f"Ollama skipped ({e}) — will use SentenceTransformer" )
 
-        # SentenceTransformer fallback (works without Ollama; ~90 MB download on first run)
+        # SentenceTransformer fallback (heavy - not recommended for Render)
         try :
             from sentence_transformers import SentenceTransformer
             model_name = getattr( settings, "EMBEDDING_MODEL", "all-MiniLM-L6-v2" )
             logger.info( f"Loading SentenceTransformer: {model_name}" )
+            self._use_tfidf = False
             return SentenceTransformer( model_name )
         except Exception as e :
-            logger.error( f"Failed to load any embedder: {e}" )
-            raise RuntimeError(
-                "No embedding model available — run: pip install sentence-transformers"
+            logger.error( f"Failed to load SentenceTransformer: {e}" )
+            # Final fallback to TF-IDF
+            logger.warning( "Falling back to TF-IDF embeddings" )
+            from sklearn.feature_extraction.text import TfidfVectorizer
+            return TfidfVectorizer(
+                max_features=self._dimension,
+                stop_words="english"
             )
 
     def _get_embedding ( self, text: str ) -> List[float] :
         """Get embedding for a single text"""
+        self._ensure_embedder()
+
         try :
             # Check if using Ollama service
             if hasattr( self.embedder, 'get_embedding' ) :
@@ -82,6 +114,13 @@ class VectorStore :
                 if isinstance( embedding, np.ndarray ) :
                     return embedding.tolist()
                 return embedding
+
+            # Check if using TF-IDF
+            if hasattr( self.embedder, 'transform' ) :
+                # TF-IDF vectorizer
+                result = self.embedder.transform( [text] ).toarray()[0]
+                return result.tolist()
+
             # SentenceTransformer
             result = self.embedder.encode( [text] )[0]
             if isinstance( result, np.ndarray ) :
@@ -93,6 +132,8 @@ class VectorStore :
 
     def _get_embeddings ( self, texts: List[str] ) -> List[List[float]] :
         """Get embeddings for multiple texts"""
+        self._ensure_embedder()
+
         try :
             # Check if using Ollama service
             if hasattr( self.embedder, 'get_embeddings' ) :
@@ -100,6 +141,13 @@ class VectorStore :
                 if isinstance( embeddings, np.ndarray ) :
                     return embeddings.tolist()
                 return embeddings
+
+            # Check if using TF-IDF
+            if hasattr( self.embedder, 'transform' ) :
+                # TF-IDF vectorizer
+                result = self.embedder.transform( texts ).toarray()
+                return result.tolist()
+
             # SentenceTransformer
             result = self.embedder.encode( texts )
             if isinstance( result, np.ndarray ) :
@@ -238,7 +286,7 @@ class VectorStore :
         """Get vector store statistics including freshness"""
         # Use cached count; fall back to live count if cache unset
         count = self._count_cache if self._count_cache >= 0 else self.collection.count()
-        if self._count_cache < 0:
+        if self._count_cache < 0 :
             self._count_cache = count
 
         freshness = "unknown"
@@ -246,7 +294,7 @@ class VectorStore :
 
         if count > 0 :
             try :
-                sample_emb = self._get_embeddings(["software"])
+                sample_emb = self._get_embeddings( ["software"] )
                 sample = self.collection.query(
                     query_embeddings=sample_emb,
                     n_results=min( 10, count )
@@ -270,7 +318,8 @@ class VectorStore :
             except Exception as e :
                 logger.error( f"Error checking freshness: {e}" )
 
-        embedder_info = "Ollama" if hasattr( self.embedder, 'available' ) else "SentenceTransformer"
+        embedder_info = "TF-IDF" if self._use_tfidf else (
+            "Ollama" if hasattr( self.embedder, 'available' ) else "SentenceTransformer")
 
         return {
             "total_jobs" : count,
@@ -292,25 +341,22 @@ class VectorStore :
             logger.error( f"Error clearing vector store: {str( e )}" )
 
 
-# Singleton instance
-# NOTE: VectorStore initialization must NOT crash the whole API on startup.
-# ChromaDB schema migrations can fail if the local sqlite schema is stale.
-# We lazily initialize with graceful fallback.
-try:
+# Singleton instance with graceful failure - no heavy loading at startup
+vector_store = None
+
+try :
     vector_store = VectorStore()
-except Exception as e:  # pragma: no cover
-    logger.exception(f"VectorStore init failed; starting in degraded mode: {e}")
+    logger.info( "Vector store singleton created (lazy loading enabled)" )
+except Exception as e :
+    logger.exception( f"VectorStore init failed; starting in degraded mode: {e}" )
 
-    # Remove/refresh the existing chroma sqlite schema if it's stale.
-    # The most common error is: "no such column: collections.topic".
-    try:
-        if hasattr(settings, "CHROMA_PERSIST_DIR"):
-            persist_dir = Path(settings.CHROMA_PERSIST_DIR)
+    # Remove/refresh the existing chroma sqlite schema if it's stale
+    try :
+        if hasattr( settings, "CHROMA_PERSIST_DIR" ) :
+            persist_dir = Path( settings.CHROMA_PERSIST_DIR )
             sqlite_path = persist_dir / "chroma.sqlite3"
-            if sqlite_path.exists():
-                logger.warning("Deleting stale Chroma sqlite schema at %s", sqlite_path)
+            if sqlite_path.exists() :
+                logger.warning( "Deleting stale Chroma sqlite schema at %s", sqlite_path )
                 sqlite_path.unlink()
-    except Exception as cleanup_exc:
-        logger.warning("Chroma schema cleanup failed: %s", cleanup_exc)
-
-    vector_store = None
+    except Exception as cleanup_exc :
+        logger.warning( f"Chroma schema cleanup failed: {cleanup_exc}" )
