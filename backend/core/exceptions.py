@@ -41,9 +41,24 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 
 
+# ── Compatibility enums / aliases ───────────────────────────────────────────
+# Some older parts of the codebase import these symbols even though the new
+# exception hierarchy uses class-based error types.
+# Keeping lightweight shims prevents import-time crashes.
+
+class AIErrorCategory:  # pragma: no cover
+    """Backwards-compatible shim for older imports."""
+
+    LLM = "llm"
+    EMBEDDING = "embedding"
+    STORAGE = "storage"
+    OTHER = "other"
+
+
 # ── Base ──────────────────────────────────────────────────────────────────────
 
 class CareerGenieError(Exception):
+
     """
     Root exception for all Career Genie errors.
 

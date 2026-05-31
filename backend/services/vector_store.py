@@ -282,4 +282,11 @@ class VectorStore :
 
 
 # Singleton instance
-vector_store = VectorStore()
+# NOTE: VectorStore initialization must NOT crash the whole API on startup.
+# ChromaDB schema migrations can fail if the local sqlite schema is stale.
+# We lazily initialize with graceful fallback.
+try:
+    vector_store = VectorStore()
+except Exception as e:  # pragma: no cover
+    logger.exception(f"VectorStore init failed; starting in degraded mode: {e}")
+    vector_store = None

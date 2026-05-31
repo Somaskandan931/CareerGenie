@@ -11,9 +11,10 @@ from backend.core.exceptions import (
     LLMParseError,
     LLMUnavailableError,
     ValidationError,
-    AuthenticationError,
+    AuthError as AuthenticationError,
     NotFoundError,
 )
+
 from backend.core.logging import get_logger, log_ai_error, setup_logging
 
 __all__ = [
