@@ -12,15 +12,15 @@ const FEATURES = [
   {
     key:   "jobs",
     title: "Job Matching",
-    desc:  "RAG-powered semantic job matching against live listings using ChromaDB + embeddings.",
+    desc:  "Matches your resume against live job listings and ranks them by how well your skills align.",
     icon:  "💼",
-    badge: "RAG",
+    badge: "Live Jobs",
     border: "hover:border-indigo-400 dark:hover:border-indigo-500",
   },
   {
     key:   "analyzer",
     title: "Resume Analyzer",
-    desc:  "ATS scoring + AI recruiter panel. See exactly how recruiters evaluate your resume.",
+    desc:  "Scores your resume for ATS compatibility and shows exactly how recruiters evaluate it.",
     icon:  "📄",
     badge: "ATS",
     border: "hover:border-blue-400 dark:hover:border-blue-500",
@@ -28,17 +28,17 @@ const FEATURES = [
   {
     key:   "rewriter",
     title: "Resume Rewriter",
-    desc:  "LangChain PromptTemplate + LLMChain rewrite. Action verbs, metrics, ATS-ready.",
+    desc:  "Rewrites your resume with stronger action verbs, quantified achievements, and ATS-friendly formatting.",
     icon:  "✍️",
-    badge: "LangChain",
+    badge: "AI",
     border: "hover:border-violet-400 dark:hover:border-violet-500",
   },
   {
     key:   "learning",
     title: "Learning Path",
-    desc:  "LangGraph deep analysis: parse → gap analysis → roadmap → project suggestions.",
+    desc:  "Generates a week-by-week learning plan from your skill gaps, with real resource links and portfolio projects.",
     icon:  "🗺️",
-    badge: "LangGraph",
+    badge: "Guided",
     border: "hover:border-green-400 dark:hover:border-green-500",
   },
   {
@@ -51,10 +51,10 @@ const FEATURES = [
   },
   {
     key:   "coach",
-    title: "Career Debate",
-    desc:  "Multi-agent Propose → Critique → Synthesise debate system for career decisions.",
+    title: "Career Coach",
+    desc:  "Ask Genie anything about your career — salary negotiation, role transitions, skill gaps.",
     icon:  "🤖",
-    badge: "Agentic AI",
+    badge: "Chat",
     border: "hover:border-orange-400 dark:hover:border-orange-500",
   },
   {
@@ -100,7 +100,7 @@ export default function HomePage({ resumeText, careerAdvice, onNavigate }) {
           Career Genie AI
         </h1>
         <p className="text-sm text-gray-500 dark:text-gray-400 max-w-xl mx-auto">
-          RAG · LangChain · LangGraph · Multi-Agent Debate · Live Job Matching · ATS Scoring
+          Find jobs that match your resume, fix your ATS score, and prepare for interviews — all in one place.
         </p>
 
         {!resumeText ? (
@@ -192,7 +192,7 @@ export default function HomePage({ resumeText, careerAdvice, onNavigate }) {
       {/* ── Tech stack footer ─────────────────────────────────────────────── */}
       <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-700">
         <p className="text-xs text-center text-gray-400 dark:text-gray-600">
-          Powered by ChromaDB · LangChain · LangGraph · FastAPI · Ollama / Groq / Anthropic / Gemini
+          Career Genie · AI-powered career tools
         </p>
       </div>
 

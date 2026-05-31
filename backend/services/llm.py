@@ -67,7 +67,7 @@ def _get_groq():
     global _groq_client
     if _groq_client is not None:
         return _groq_client
-    from backend.config import settings
+    from backend.core.config import settings
     if not settings.GROQ_API_KEY:
         return None
     try:
@@ -97,7 +97,7 @@ def _get_anthropic():
     global _anthropic_client
     if _anthropic_client is not None:
         return _anthropic_client
-    from backend.config import settings
+    from backend.core.config import settings
     if not settings.ANTHROPIC_API_KEY:
         return None
     try:
@@ -126,7 +126,7 @@ def _get_gemini():
     global _gemini_client, _genai_module
     if _gemini_client is not None:
         return _gemini_client, _genai_module
-    from backend.config import settings
+    from backend.core.config import settings
     if not settings.GEMINI_API_KEY:
         return None, None
     try:
@@ -216,7 +216,7 @@ def _call_ollama(system: str, user: str, *, temp: float, max_tokens: int) -> str
 
 
 def _call_groq(system: str, user: str, *, temp: float, max_tokens: int) -> str:
-    from backend.config import settings
+    from backend.core.config import settings
     client = _get_groq()
     if not client:
         raise RuntimeError("Groq not configured")
@@ -263,7 +263,7 @@ def _call_groq(system: str, user: str, *, temp: float, max_tokens: int) -> str:
 
 
 def _call_anthropic(system: str, user: str, *, temp: float, max_tokens: int) -> str:
-    from backend.config import settings
+    from backend.core.config import settings
     client = _get_anthropic()
     if not client:
         raise RuntimeError("Anthropic not configured")
@@ -303,7 +303,7 @@ def _call_anthropic(system: str, user: str, *, temp: float, max_tokens: int) -> 
 
 
 def _call_gemini(system: str, user: str, *, temp: float, max_tokens: int) -> str:
-    from backend.config import settings
+    from backend.core.config import settings
     client, genai = _get_gemini()
     if not client or not genai:
         raise RuntimeError("Gemini not configured")
@@ -346,7 +346,7 @@ def _call_sync(
     temp:       float = 0.7,
     max_tokens: int   = 1024,
 ) -> str:
-    from backend.config import settings
+    from backend.core.config import settings
 
     # 1. Ollama (local, no rate limits, no internet needed)
     try:

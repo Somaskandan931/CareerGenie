@@ -6,7 +6,7 @@ import re
 import time
 import hashlib
 
-from backend.config import settings
+from backend.core.config import settings
 
 logger = logging.getLogger( __name__ )
 

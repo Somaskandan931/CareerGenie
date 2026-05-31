@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback, createContext } from "react";
 import JobSearch from './components/JobSearch';
 import JobMatches from './components/JobMatches';
-import SkillAssessmentDashboard from './components/SkillAssessmentDashboard';
+
 import RoadmapView from './components/Roadmapview';
 import ProjectSuggestions from './components/ProjectSuggestions';
-import TNAnalyticsDashboard from './components/TNAnalyticsDashboard';
+
 import JobCoachChat from './components/JobCoachChat';
 import MarketInsights from './components/MarketInsights';
 import InterviewCoach from './components/InterviewCoach';
@@ -169,95 +169,7 @@ const CareerAdvice = ({ careerAdvice }) => {
   );
 };
 
-// ─── Debate Synthesis Panel ───────────────────────────────────────────────────
-const DebateSynthesis = ({ synthesis }) => {
-  const [expanded, setExpanded] = useState(false);
-  if (!synthesis?.action_plan && !synthesis?.key_insight) return null;
 
-  const consensus = synthesis.consensus_score;
-  const rounds    = synthesis.debate_rounds;
-  const consensusColor =
-    consensus >= 0.75 ? "text-green-600 bg-green-50 border-green-200" :
-    consensus >= 0.5  ? "text-yellow-600 bg-yellow-50 border-yellow-200" :
-                        "text-orange-600 bg-orange-50 border-orange-200";
-
-  return (
-    <div className="bg-white dark:bg-gray-800 border border-indigo-200 dark:border-indigo-700 rounded-xl p-6 mb-6">
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-lg bg-indigo-100 dark:bg-indigo-900/40 flex items-center justify-center">
-            <Icon d={icons.debate} size="h-4 w-4" className="text-indigo-600 dark:text-indigo-400" />
-          </div>
-          <div>
-            <h2 className="text-base font-medium text-gray-900 dark:text-white">Agent Consensus · This Week's Plan</h2>
-            <p className="text-xs text-gray-500 dark:text-gray-400">
-              {rounds} debate round{rounds !== 1 ? "s" : ""} · 3 agents · synthesised recommendation
-            </p>
-          </div>
-        </div>
-        {consensus != null && (
-          <span className={`text-xs px-2 py-0.5 rounded-full border font-medium ${consensusColor}`}>
-            {Math.round(consensus * 100)}% consensus
-          </span>
-        )}
-      </div>
-
-      {synthesis.key_insight && (
-        <div className="mb-4 p-3 bg-indigo-50 dark:bg-indigo-900/20 border-l-4 border-indigo-500 rounded-r-lg">
-          <p className="text-xs font-medium text-indigo-600 dark:text-indigo-400 mb-1">Key insight</p>
-          <p className="text-sm text-indigo-800 dark:text-indigo-200">{synthesis.key_insight}</p>
-        </div>
-      )}
-
-      {synthesis.action_plan?.length > 0 && (
-        <div className="mb-4">
-          <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-3">Consensus action plan</p>
-          <div className="space-y-2">
-            {synthesis.action_plan.map((step, i) => (
-              <div key={i} className="flex items-start gap-3 p-3 bg-gray-50 dark:bg-gray-700 rounded-lg border border-gray-100 dark:border-gray-600">
-                <span className="flex-shrink-0 w-5 h-5 bg-indigo-600 text-white rounded-full flex items-center justify-center text-xs font-medium">{i + 1}</span>
-                <p className="text-sm text-gray-700 dark:text-gray-200">{step}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {synthesis.top_job_recommendation && (
-        <div className="p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700 rounded-lg mb-4">
-          <p className="text-xs font-medium text-green-700 dark:text-green-400 mb-1">Top job recommendation</p>
-          <p className="text-sm text-green-800 dark:text-green-200">{synthesis.top_job_recommendation}</p>
-        </div>
-      )}
-
-      {synthesis.timeline && (
-        <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">Timeline: {synthesis.timeline}</p>
-      )}
-
-      {/* Elements adopted — collapsed by default */}
-      {synthesis.elements_adopted_from && (
-        <div className="mt-3">
-          <button
-            onClick={() => setExpanded(e => !e)}
-            className="text-xs text-indigo-500 hover:text-indigo-600 dark:text-indigo-400 dark:hover:text-indigo-300 transition-colors"
-          >
-            {expanded ? "Hide" : "Show"} agent perspectives
-          </button>
-          {expanded && (
-            <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
-              {Object.entries(synthesis.elements_adopted_from).map(([agent, text]) => (
-                <div key={agent} className="p-3 bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg">
-                  <p className="text-xs font-medium text-gray-600 dark:text-gray-400 capitalize mb-1">{agent}</p>
-                  <p className="text-xs text-gray-700 dark:text-gray-300">{text}</p>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-};
 
 // ─── Learning Path Tab ────────────────────────────────────────────────────────
 const LearningPathTab = ({ resumeText, careerAdvice, onImported }) => {
@@ -462,7 +374,6 @@ export default function App() {
   const [filters, setFilters]                 = useState({});
   const [careerAdvice, setCareerAdvice]       = useState(null);
   const [skillComparison, setSkillComparison] = useState(null);
-  const [synthesis, setSynthesis]             = useState(null);
   const [backendConfig, setBackendConfig]     = useState(null);
   const [dark, setDark]                       = useState(() => localStorage.getItem("cg-theme") === "dark");
   // Lifted from LearningPathTab so ProgressDashboard can react to imports
@@ -498,9 +409,7 @@ export default function App() {
   // dep → useCallback recreates matchJobs → useEffect re-fires → infinite loop.
   const handleSetCareerAdvice = useCallback((advice) => {
     setCareerAdvice(advice);
-    if (advice?.synthesis) setSynthesis(advice.synthesis);
-    else if (advice?.action_plan) setSynthesis(null);
-  }, []); // no deps — only calls stable React state setters
+  }, []);
 
   const resumeSkills = skillComparison?.resume_skills?.map(s => s.skill) || [];
 
@@ -519,7 +428,6 @@ export default function App() {
     { key: "coach",       label: "Job Coach",       icon: icons.coach },
     { key: "mentors",     label: "Expert Mentors",  icon: icons.globe },
     { key: "insights",    label: "Market Insights", icon: icons.insights },
-    { key: "institution", label: "Institution",     icon: icons.institution },
   ];
 
   const PAGE_TITLES = {
@@ -533,11 +441,10 @@ export default function App() {
     coach:       "Job Coach",
     mentors:     "Expert Mentors",
     insights:    "Market Insights",
-    institution: "Institution Analytics",
     employer:    "Post a Job",
   };
 
-  const showResume = !["institution", "progress", "mentors", "home", "employer"].includes(activeTab);
+  const showResume = !["progress", "mentors", "home", "employer"].includes(activeTab);
 
   const NavItem = ({ item }) => (
     <button onClick={() => setActiveTab(item.key)}
@@ -649,7 +556,6 @@ export default function App() {
             {activeTab === "jobs" && (
               <>
                 <JobSearch setJobQuery={setJobQuery} setJobLocation={setJobLocation} setFilters={setFilters} />
-                <SkillAssessmentDashboard resumeSkills={skillComparison?.resume_skills || []} jobSkills={skillComparison?.job_skills || []} comparison={skillComparison} />
                 <JobMatches
                   jobQuery={jobQuery}
                   jobLocation={jobLocation}
@@ -659,8 +565,6 @@ export default function App() {
                   setSkillComparison={setSkillComparison}
                   userId={USER_ID}
                 />
-                {/* Debate synthesis shown above career advice if present */}
-                <DebateSynthesis synthesis={synthesis} />
                 <CareerAdvice careerAdvice={careerAdvice} />
                 <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mt-4">
                   {careerAdvice?.skill_gaps?.length > 0 && (
@@ -711,13 +615,12 @@ export default function App() {
             {activeTab === "rewriter"    && <ResumeRewriter resumeText={resumeText} />}
             {activeTab === "home"        && <HomePage resumeText={resumeText} careerAdvice={careerAdvice} onNavigate={setActiveTab} />}
             {activeTab === "employer"    && <JobPost />}
-            {activeTab === "institution" && <TNAnalyticsDashboard />}
 
           </div>
         </main>
 
         <footer className="h-8 flex-shrink-0 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 flex items-center justify-center">
-          <p className="text-xs text-gray-400 dark:text-gray-500">Career Genie v4.0 · Groq · RAG · ChromaDB · LTR · Agent Debate · Naan Mudhalvan · TNSDC · NSQF · Expert Mentors · ATS Scorer · Resume Rewriter</p>
+          <p className="text-xs text-gray-400 dark:text-gray-500">Career Genie · AI-powered career tools</p>
         </footer>
       </div>
     </div>

@@ -1,7 +1,4 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import VideoPanel from "./VideoPanel";
-import LiveFeedback from "./LiveFeedback";
-
 import API_BASE_URL from '../config';
 const WS_BASE =
   process.env.REACT_APP_WS_URL ||
@@ -555,9 +552,6 @@ const AILiveInterviewModal = ({ config, onClose }) => {
             <div ref={chatEndRef} />
           </div>
 
-          {/* Live feedback from last answer */}
-          {feedback && <div className="mt-2"><LiveFeedback feedback={feedback} compact /></div>}
-
           {/* Input area */}
           <div className="mt-3 pt-3" style={{ borderTop: "1px solid rgba(255,255,255,0.08)" }}>
             <div className="flex gap-2 items-end">
@@ -805,14 +799,8 @@ const SetupScreen = ({ onStart, resumeText }) => {
 
 const InterviewCoach = ({ resumeText = "", userId = "default_user" }) => {
   // Setup ↔ live interview phase
-  const [phase,  setPhase]  = useState("setup");  // "setup" | "live" | "mentor"
+  const [phase,  setPhase]  = useState("setup");  // "setup" | "live"
   const [config, setConfig] = useState(null);
-
-  // Mentor room session
-  const [mentorRoomId] = useState(
-    () => Math.random().toString(36).slice(2, 8).toUpperCase()
-  );
-  const [showMentor, setShowMentor] = useState(false);
 
   // ── Render: live AI interview (full-screen modal) ─────────────────────────
   if (phase === "live" && config) {
@@ -829,22 +817,13 @@ const InterviewCoach = ({ resumeText = "", userId = "default_user" }) => {
             <BackIcon />
           </button>
           <p className="text-white/60 text-sm font-semibold">AI Mock Interview</p>
-          {/* Mentor video toggle inside interview */}
-          <button onClick={() => setShowMentor((v) => !v)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border border-white/15 text-white/50 hover:border-white/25 hover:text-white/80 transition-all">
-            📹 Mentor
-          </button>
+          <div className="w-8" />
         </div>
 
         {/* Interview content */}
         <div className="flex-1 overflow-hidden p-5">
           <AILiveInterviewModal config={config} onClose={() => setPhase("setup")} />
         </div>
-
-        {/* Floating mentor video */}
-        {showMentor && (
-          <VideoPanel roomId={mentorRoomId} role="candidate" onClose={() => setShowMentor(false)} />
-        )}
       </div>
     );
   }
@@ -856,45 +835,6 @@ const InterviewCoach = ({ resumeText = "", userId = "default_user" }) => {
         resumeText={resumeText}
         onStart={(cfg) => { setConfig(cfg); setPhase("live"); }}
       />
-
-      {/* ── Mentor session launch bar ──────────────────────────────────────── */}
-      <div
-        className="fixed bottom-0 left-0 right-0 z-40 flex items-center justify-between px-6 py-3"
-        style={{
-          background: "rgba(8,8,18,0.95)",
-          backdropFilter: "blur(16px)",
-          borderTop: "1px solid rgba(255,255,255,0.07)",
-          fontFamily: "'DM Sans', sans-serif",
-        }}
-      >
-        <div className="flex items-center gap-2">
-          <span className="text-white/30 text-xs">Want a human mentor?</span>
-          <span
-            className="text-xs font-bold px-2 py-0.5 rounded-md text-indigo-300"
-            style={{ background: "rgba(99,102,241,0.15)" }}
-          >
-            Room: {mentorRoomId}
-          </span>
-        </div>
-        <button
-          onClick={() => setShowMentor((v) => !v)}
-          className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold text-white transition-all hover:scale-[1.02]"
-          style={{
-            background: showMentor
-              ? "rgba(220,38,38,0.3)"
-              : "linear-gradient(135deg,#4f46e5,#7c3aed)",
-            border: showMentor ? "1px solid rgba(220,38,38,0.5)" : "none",
-            boxShadow: showMentor ? "none" : "0 4px 14px rgba(99,102,241,0.35)",
-          }}
-        >
-          {showMentor ? "📵 Close Video" : "📹 Start Mentor Session"}
-        </button>
-      </div>
-
-      {/* Floating mentor video panel */}
-      {showMentor && (
-        <VideoPanel roomId={mentorRoomId} role="candidate" onClose={() => setShowMentor(false)} />
-      )}
     </div>
   );
 };

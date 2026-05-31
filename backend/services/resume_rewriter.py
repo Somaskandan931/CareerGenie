@@ -1,18 +1,28 @@
 """
-resume_rewriter.py
-==================
+backend/services/resume_rewriter.py
+======================================
 LangChain-powered resume rewriter.
-Uses PromptTemplate + LLMChain — this is the LangChain integration
-for your portfolio. Fallback to llm.py if LangChain is unavailable.
+Uses PromptTemplate + LLMChain — LangChain integration for portfolio value.
+Falls back to ai_pipeline if LangChain is unavailable.
+
+Refactored to:
+  - Use centralized prompts from ``backend.core.prompts``
+  - Route fallback calls through ``backend.core.ai_pipeline``
+  - Sanitize user-supplied resume text
+  - Use structured logging via ``backend.core.logging``
 """
 from __future__ import annotations
 
 import json
-import logging
 import re
 from typing import Dict
 
-logger = logging.getLogger(__name__)
+from backend.core import ai_pipeline
+from backend.core.config import settings
+from backend.core.logging import get_logger
+from backend.core.prompts import Prompts
+
+logger = get_logger("resume_rewriter")
 
 
 def _build_langchain_chain(target_role: str, tone: str):
@@ -22,32 +32,17 @@ def _build_langchain_chain(target_role: str, tone: str):
     """
     from langchain.prompts import PromptTemplate
     from langchain.chains import LLMChain
-    from backend.config import settings
 
-    template = """You are an expert resume writer and ATS optimization specialist.
+    # Use rewrite_resume prompt from centralized Prompts
+    _, prompt_text = Prompts.rewrite_resume("{{resume_text}}", target_role, tone)
 
-Rewrite the following resume for the target role: "{target_role}"
-Tone: {tone}
-
-ORIGINAL RESUME:
-{resume_text}
-
-REWRITING RULES — follow every rule strictly:
-1. PROFESSIONAL SUMMARY: Write a powerful 2-3 sentence summary tailored to {target_role}.
-2. ACTION VERBS: Start every bullet with a strong action verb (Led, Built, Optimized, Delivered, Architected, Drove, Engineered, Reduced, Increased, Launched).
-3. QUANTIFY EVERYTHING: Add realistic metrics wherever possible (%, $, #, time saved).
-4. KEYWORDS: Naturally weave in role-specific keywords for "{target_role}" throughout.
-5. ATS FORMAT: Standard section headers only — PROFESSIONAL SUMMARY, EXPERIENCE, SKILLS, EDUCATION.
-6. MAINTAIN FACTS: Keep all real companies, dates, degrees, and job titles — only improve the language.
-
-Return ONLY the rewritten resume text. No commentary, no markdown fences, no explanation."""
-
+    template = prompt_text.replace("{{resume_text}}", "{resume_text}")
     prompt = PromptTemplate(
-        input_variables=["resume_text", "target_role", "tone"],
+        input_variables=["resume_text"],
         template=template,
     )
 
-    # Try Ollama first (local, free, fast)
+    # Try Ollama first
     try:
         from langchain_community.llms import Ollama
         llm = Ollama(
@@ -56,8 +51,8 @@ Return ONLY the rewritten resume text. No commentary, no markdown fences, no exp
             temperature=0.4,
         )
         return LLMChain(llm=llm, prompt=prompt)
-    except Exception as e:
-        logger.warning(f"Ollama LangChain init failed: {e}")
+    except Exception as exc:
+        logger.warning("Ollama LangChain init failed: %s", exc)
 
     # Groq fallback
     try:
@@ -68,22 +63,24 @@ Return ONLY the rewritten resume text. No commentary, no markdown fences, no exp
             temperature=0.4,
         )
         return LLMChain(llm=llm, prompt=prompt)
-    except Exception as e:
-        logger.warning(f"Groq LangChain init failed: {e}")
+    except Exception as exc:
+        logger.warning("Groq LangChain init failed: %s", exc)
 
     return None
 
 
 class ResumeRewriter:
+
     def rewrite(
         self,
         resume_text: str,
         target_role: str = "Software Engineer",
         tone: str = "professional",
     ) -> Dict:
-        rewritten   = self._rewrite_resume(resume_text, target_role, tone)
-        comparisons = self._generate_comparisons(resume_text, rewritten, target_role)
-        changes     = self._summarize_changes(resume_text, rewritten)
+        safe_resume = ai_pipeline.sanitize_user_content(resume_text)
+        rewritten   = self._rewrite_resume(safe_resume, target_role, tone)
+        comparisons = self._generate_comparisons(safe_resume, rewritten, target_role)
+        changes     = self._summarize_changes(safe_resume, rewritten)
         return {
             "rewritten_resume": rewritten,
             "before_after":     comparisons,
@@ -92,64 +89,33 @@ class ResumeRewriter:
             "tone":             tone,
         }
 
-    # ── Step 1: full rewrite ──────────────────────────────────────────────────
     def _rewrite_resume(self, resume_text: str, target_role: str, tone: str) -> str:
-        # ── Try LangChain first ───────────────────────────────────────────────
+        # ── Try LangChain first ────────────────────────────────────────────────
         try:
             chain = _build_langchain_chain(target_role, tone)
             if chain is not None:
-                result = chain.run(
-                    resume_text=resume_text[:3000],
-                    target_role=target_role,
-                    tone=tone,
-                )
-                logger.info("Resume rewrite via LangChain ✓")
+                result = chain.run(resume_text=resume_text[:3000])
+                logger.info("Resume rewrite via LangChain completed")
                 return result
-        except Exception as e:
-            logger.warning(f"LangChain rewrite failed ({e}), falling back to llm.py")
+        except Exception as exc:
+            logger.warning("LangChain rewrite failed (%s), falling back to ai_pipeline", exc)
 
-        # ── Fallback: existing llm.py — no behaviour change for the user ──────
-        from backend.services.llm import llm_call_smart_sync
-        from backend.config import settings
-
-        prompt = f"""You are an expert resume writer and ATS optimization specialist.
-
-Rewrite the following resume for the target role: "{target_role}"
-Tone: {tone}
-
-ORIGINAL RESUME:
-{resume_text[:3000]}
-
-REWRITING RULES — follow every rule strictly:
-1. PROFESSIONAL SUMMARY: Write a powerful 2-3 sentence summary at the top tailored to {target_role}.
-2. ACTION VERBS: Start every bullet with a strong action verb (Led, Built, Optimized, Delivered, Architected, Drove, Engineered, Reduced, Increased, Launched).
-3. QUANTIFY EVERYTHING: Add realistic metrics wherever possible (%, $, #, time saved). If the original has no numbers, infer reasonable ones from context.
-4. KEYWORDS: Naturally weave in role-specific keywords for "{target_role}" throughout.
-5. CONCISENESS: Each bullet = 1 impactful line. Remove filler words (responsible for, assisted with, helped to).
-6. ATS FORMAT: Use standard section headers: PROFESSIONAL SUMMARY, EXPERIENCE, SKILLS, EDUCATION. No tables, no columns.
-7. SKILLS SECTION: Organize skills into clear categories (Technical Skills, Tools, Soft Skills).
-8. MAINTAIN FACTS: Keep all real companies, dates, degrees, and job titles — only improve the language.
-
-Return ONLY the rewritten resume text. No commentary, no markdown fences, no explanation."""
-
+        # ── Fallback: ai_pipeline via centralized prompts ──────────────────────
+        system, user = Prompts.rewrite_resume(resume_text, target_role, tone)
         try:
-            return llm_call_smart_sync(
-                system="You are an expert AI assistant. Respond clearly and concisely.",
-                user=prompt,
+            return ai_pipeline.call_smart(
+                system=system,
+                user=user,
                 temp=0.4,
                 max_tokens=settings.MAX_TOKENS_ROADMAP,
             )
-        except Exception as e:
-            logger.error(f"Resume rewrite error: {e}")
+        except Exception as exc:
+            logger.error("Resume rewrite error: %s", exc)
             return resume_text  # last resort: return original
 
-    # ── Step 2: before/after bullet comparisons ───────────────────────────────
-    def _generate_comparisons(
-        self, original: str, rewritten: str, target_role: str
-    ) -> list:
-        from backend.services.llm import llm_call_sync
-
-        prompt = f"""Compare the original and rewritten resumes below.
+    def _generate_comparisons(self, original: str, rewritten: str, target_role: str) -> list:
+        system = "You are an expert resume analyst. Respond with ONLY valid JSON."
+        user = f"""Compare the original and rewritten resumes below.
 Find 4 bullet points that were significantly improved.
 
 ORIGINAL:
@@ -158,10 +124,10 @@ ORIGINAL:
 REWRITTEN:
 {rewritten[:1500]}
 
-Return ONLY a valid JSON array with exactly 4 objects (no markdown, no extra text):
+Return ONLY a valid JSON array with exactly 4 objects:
 [
   {{
-    "section": "<section name e.g. Experience, Summary>",
+    "section": "<section name>",
     "before": "<original bullet or sentence>",
     "after": "<rewritten bullet or sentence>",
     "improvement": "<one sentence explaining what improved>"
@@ -169,28 +135,19 @@ Return ONLY a valid JSON array with exactly 4 objects (no markdown, no extra tex
 ]"""
 
         try:
-            raw = llm_call_sync(
-                system="You are an expert AI assistant. Respond clearly and concisely.",
-                user=prompt,
-                temp=0.2,
-                max_tokens=800,
-            )
-            raw = re.sub(r"^```json\s*", "", raw)
-            raw = re.sub(r"^```\s*",     "", raw)
-            raw = re.sub(r"\s*```$",     "", raw)
-            return json.loads(raw)
-        except Exception as e:
-            logger.error(f"Comparison generation error: {e}")
-            return [
-                {
-                    "section": "Experience",
-                    "before": "Was responsible for helping the team with tasks",
-                    "after": "Led cross-functional team of 5, delivering projects 20% ahead of schedule",
-                    "improvement": "Added action verb, quantified impact, removed passive language",
-                }
-            ]
+            result = ai_pipeline.call_json(system, user, temp=0.2, max_tokens=800)
+            if isinstance(result, list):
+                return result
+        except Exception as exc:
+            logger.error("Comparison generation error: %s", exc)
 
-    # ── Step 3: high-level changes summary ───────────────────────────────────
+        return [{
+            "section": "Experience",
+            "before": "Was responsible for helping the team with tasks",
+            "after": "Led cross-functional team of 5, delivering projects 20% ahead of schedule",
+            "improvement": "Added action verb, quantified impact, removed passive language",
+        }]
+
     def _summarize_changes(self, original: str, rewritten: str) -> Dict:
         orig_words    = len(original.split())
         rewrite_words = len(rewritten.split())
@@ -208,10 +165,10 @@ Return ONLY a valid JSON array with exactly 4 objects (no markdown, no extra tex
         new_nums  = len(re.findall(r'\d+%|\$\d+|\d+ \w+s', rewritten))
 
         return {
-            "word_count":         {"before": orig_words, "after": rewrite_words},
-            "bullet_points":      {"before": orig_bullets, "after": new_bullets},
-            "action_verbs":       {"before": orig_av, "after": new_av, "added": max(0, new_av - orig_av)},
-            "quantified_metrics": {"before": orig_nums, "after": new_nums, "added": max(0, new_nums - orig_nums)},
+            "word_count":         {"before": orig_words,    "after": rewrite_words},
+            "bullet_points":      {"before": orig_bullets,  "after": new_bullets},
+            "action_verbs":       {"before": orig_av,       "after": new_av,       "added": max(0, new_av - orig_av)},
+            "quantified_metrics": {"before": orig_nums,     "after": new_nums,     "added": max(0, new_nums - orig_nums)},
             "improvements": [
                 f"Added {max(0, new_av - orig_av)} action verbs",
                 f"Added {max(0, new_nums - orig_nums)} quantified metrics",

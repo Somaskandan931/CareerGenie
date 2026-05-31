@@ -124,8 +124,6 @@ app.add_middleware(
 # ROUTER IMPORTS
 # ─────────────────────────────────────────────────────────────────────────────
 
-from backend.routes.interview_live import router as interview_live_router
-app.include_router(interview_live_router)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -250,15 +248,11 @@ async def parse_resume(file: UploadFile = File(...)):
         from backend.services.resume_parser import resume_parser
         result = resume_parser.parse(str(temp_path))
 
-        from backend.services.uncertainty_handler import get_uncertainty_handler
-        uh = get_uncertainty_handler()
-        _, report = uh.wrap_parse(result["resume_text"], result["word_count"])
-
         return {
             "success": True,
             "resume_text": result["resume_text"],
             "word_count": result["word_count"],
-            "confidence": report.to_dict(),
+            "confidence": {},
         }
     except Exception as e:
         logger.error(f"Resume parse error: {e}")
@@ -283,13 +277,9 @@ async def ats_score(request: ATSRequest):
             request.job_description
         )
 
-        from backend.services.uncertainty_handler import get_uncertainty_handler
-        uh = get_uncertainty_handler()
-        _, report = uh.wrap_ats(result)
-
         return {
             "result": result,
-            "_confidence": report.to_dict() if hasattr(report, "to_dict") else {},
+            "_confidence": {},
         }
     except Exception as e:
         logger.error(f"ATS score error: {e}", exc_info=True)
@@ -329,13 +319,7 @@ async def match_realtime(request: MatchRequest):
 
         matches = [m for m in matches if m.get("match_score", 0) >= request.min_match_score]
 
-        from backend.services.uncertainty_handler import get_uncertainty_handler
-        uh = get_uncertainty_handler()
-        validated_matches, report = uh.wrap_matches(matches)
-
-        for job in validated_matches:
-            if "_confidence" not in job:
-                job["_confidence"] = None
+        validated_matches = matches
 
         from backend.services.career_advisor import career_advisor
         advice = career_advisor.generate_career_advice(
@@ -359,7 +343,7 @@ async def match_realtime(request: MatchRequest):
             "search_query": request.job_query or "",
             "career_advice": advice,
             "skill_comparison": skill_comparison,
-            "_confidence": report.to_dict() if hasattr(report, "to_dict") else {},
+            "_confidence": {},
         }
     except Exception as e:
         logger.error(f"Match error: {e}", exc_info=True)
@@ -411,13 +395,9 @@ async def generate_roadmap(request: RoadmapRequest):
             request.duration_weeks,
         )
 
-        from backend.services.uncertainty_handler import get_uncertainty_handler
-        uh = get_uncertainty_handler()
-        _, report = uh.wrap_roadmap(roadmap)
-
         return {
             "roadmap": roadmap,
-            "_confidence": report.to_dict(),
+            "_confidence": {},
         }
     except Exception as e:
         logger.error(f"Roadmap generation error: {e}", exc_info=True)
@@ -519,12 +499,7 @@ async def job_coach_chat(request: ChatRequest):
         )
 
         if request.session_id:
-            from backend.services.state_manager import state
-            state.update(request.session_id, {
-                "query": request.messages[-1]["content"] if request.messages else "",
-                "final": response,
-                "confidence": 0.8,
-            })
+            pass  # session state tracking removed
 
         return {
             "reply": response,
@@ -894,7 +869,7 @@ async def extract_skills(text: str, enhanced: bool = True):
 
 
 @app.post("/skills/gap")
-async def skills_gap(resume_text: str, job_description: str):
+async def skills_gap_endpoint(resume_text: str, job_description: str):
     try:
         from backend.services.skill_tool import skills_gap
         return skills_gap(resume_text, job_description)
@@ -1165,7 +1140,11 @@ async def get_user_sessions(user_id: str):
 
 @app.websocket("/ws/room/{room_id}/{role}")
 async def websocket_room(websocket: WebSocket, room_id: str, role: str):
-    from backend.services.live_session import signaling
+    try:
+        from backend.services.live_session import signaling
+    except ImportError:
+        await websocket.close(code=1011, reason="Live session service unavailable")
+        return
 
     if role not in ("mentor", "candidate"):
         await websocket.close(code=1008, reason="Invalid role")
@@ -1191,7 +1170,11 @@ async def websocket_room(websocket: WebSocket, room_id: str, role: str):
 
 @app.websocket("/ws/interview/{session_id}")
 async def websocket_interview_session(websocket: WebSocket, session_id: str):
-    from backend.services.live_session import signaling
+    try:
+        from backend.services.live_session import signaling
+    except ImportError:
+        await websocket.close(code=1011, reason="Live session service unavailable")
+        return
 
     await websocket.accept()
     role = websocket.query_params.get("role", "candidate")
@@ -1264,8 +1247,7 @@ async def init_session():
 @app.get("/session/{session_id}")
 async def get_session(session_id: str):
     try:
-        from backend.services.state_manager import state
-        return state.snapshot(session_id)
+        return {"session_id": session_id, "status": "active"}
     except Exception as e:
         logger.error(f"Session error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

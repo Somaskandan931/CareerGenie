@@ -11,7 +11,7 @@ import numpy as np
 os.environ.setdefault( "ANONYMIZED_TELEMETRY", "False" )
 os.environ.setdefault( "CHROMA_TELEMETRY", "False" )
 
-from backend.config import settings
+from backend.core.config import settings
 
 logger = logging.getLogger( __name__ )
 
