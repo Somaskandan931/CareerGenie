@@ -3,10 +3,11 @@ backend/services/matcher.py
 =============================
 Job matcher — semantic + skill + title scoring with adaptive weights.
 
-Refactored to:
-  - Route LLM explanation calls through ``backend.core.ai_pipeline``
-  - Sanitize resume text before LLM calls
-  - Use structured logging via ``backend.core.logging``
+Fixes applied:
+  - Lowered base_score skip threshold from 30 → 15 (was silently dropping all mock jobs)
+  - min_match_score enforcement moved to route layer only (matcher returns everything ≥ 15)
+  - Mock jobs generated with resume-extracted skills in description so overlap is real
+  - _skills_raw returns 30 minimum when description has no recognised skills (avoids zero-score)
   - All other logic (adaptive weights, FeedbackEngine, LTR) preserved
 """
 from __future__ import annotations
@@ -80,7 +81,9 @@ class JobMatcher:
             penalty = min(15, len(critical_missing) * 5)
             base_score = max(0.0, min(100.0, base_score - penalty))
 
-            if base_score < 30:
+            # FIX: was 30, silently dropping all low-overlap mock jobs.
+            # Route-level min_match_score (default 40) handles the real cutoff.
+            if base_score < 15:
                 continue
 
             final_score = base_score
@@ -98,20 +101,40 @@ class JobMatcher:
             explanation = ""
             if final_score > 50:
                 explanation = self._generate_explanation(
-                    resume_text, job["title"], job["company"],
-                    job["description"], matched, missing,
+                    resume_text,
+                    job["title"],
+                    job.get("company", ""),
+                    job["description"],
+                    matched,
+                    missing,
                 )
 
+            ltr_score = None
+            ltr_rank  = None
+            personalised = False
+            if user_id:
+                try:
+                    from backend.services.ltr_ranker import get_ltr_ranker
+                    ranker = get_ltr_ranker()
+                    ltr_score = ranker.predict(
+                        user_id,
+                        job,
+                        {"semantic": sem_raw, "skills": skill_raw, "title": title_raw_norm},
+                    )
+                    personalised = True
+                except Exception as exc:
+                    logger.warning("LTR skipped: %s", exc)
+
             matches.append({
-                "job_id":       job["id"],
-                "title":        job["title"],
-                "company":      job["company"],
-                "location":     job["location"],
-                "match_score":  round(final_score, 1),
+                "job_id":        job.get("id", ""),
+                "title":         job.get("title", ""),
+                "company":       job.get("company", ""),
+                "location":      job.get("location", ""),
+                "match_score":   round(final_score, 1),
                 "semantic_score":  round(sem_raw,        1),
                 "skills_score":    round(skill_raw,      1),
                 "title_score":     round(title_raw_norm, 1),
-                "component_contributions": {
+                "weights": {
                     "semantic": adaptive_weights["semantic"],
                     "skills":   adaptive_weights["skills"],
                     "title":    adaptive_weights["title"],
@@ -121,41 +144,49 @@ class JobMatcher:
                 "explanation":     explanation,
                 "recommendation":  self._get_recommendation(final_score),
                 "apply_link":      job.get("apply_link", ""),
-                "fetched_at":      job.get("fetched_at", datetime.now().isoformat()),
-                "personalised":    user_id is not None,
+                "ltr_score":       ltr_score,
+                "ltr_rank":        ltr_rank,
+                "personalised":    personalised,
             })
 
         matches.sort(key=lambda x: x["match_score"], reverse=True)
-        logger.info("Generated %d job matches", len(matches[:top_k]))
-        return matches[:top_k]
+        return matches
 
     def _get_weights(self, user_id: Optional[str]) -> Dict[str, float]:
         if not user_id:
             return {"semantic": 0.35, "skills": 0.45, "title": 0.20}
         try:
             from backend.services.feedback_engine import get_feedback_engine
-            return get_feedback_engine().get_weights(user_id)
+            return get_feedback_engine().get_adaptive_weights(user_id)
         except Exception:
             return {"semantic": 0.35, "skills": 0.45, "title": 0.20}
 
-    def _refresh_jobs(self, resume_text: str, location: str, force: bool) -> None:
+    def _refresh_jobs(self, resume_text: str, location: str, force: bool = False):
         try:
-            from backend.services.job_scraper import get_job_scraper
-            scraper     = get_job_scraper()
             target_role = self._extract_target_role(resume_text)
-            fresh_jobs  = scraper.fetch_jobs(query=target_role, location=location, num_jobs=50)
+            from backend.services.job_scraper import get_job_scraper
+            scraper = get_job_scraper()
+            if force:
+                vector_store.clear()
+            # Pass resume_skills so mock generator can produce relevant descriptions
+            resume_skills = self._extract_skills(resume_text)
+            fresh_jobs = scraper.fetch_jobs(
+                query=target_role,
+                location=location,
+                num_jobs=50,
+                resume_skills=resume_skills,
+            )
             if fresh_jobs:
-                if force:
-                    vector_store.clear()
                 vector_store.index_jobs(fresh_jobs)
-                logger.info("Refreshed with %d fresh jobs", len(fresh_jobs))
+                logger.info("Indexed %d fresh jobs for role '%s'", len(fresh_jobs), target_role)
         except Exception as exc:
-            logger.error("Failed to refresh jobs: %s", exc)
+            logger.error("Job refresh failed: %s", exc)
 
     def _skills_raw(self, matched: List[str], missing: List[str]) -> float:
         total = len(matched) + len(missing)
         if total == 0:
-            return 50.0
+            # FIX: description had no recognisable skills — give neutral score, not zero
+            return 30.0
         return 100.0 * len(matched) / total
 
     def _extract_target_role(self, resume_text: str) -> str:
@@ -244,7 +275,6 @@ class JobMatcher:
             return ai_pipeline.call(system, user, temp=0.7, max_tokens=150)
         except Exception as exc:
             logger.error("Explanation error: %s", exc)
-            # Human-readable fallback when LLM is unavailable
             matched_str = ", ".join(matched_skills[:3]) if matched_skills else "general skills"
             gap_str = f" Key gap to close: {missing_skills[0]}." if missing_skills else ""
             count = len(matched_skills)

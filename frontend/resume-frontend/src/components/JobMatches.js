@@ -16,9 +16,10 @@ const I = {
   save:    "M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z",
   search:  "M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z",
   refresh: "M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15",
+  key:     "M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z",
 };
 
-// ── Fixed feedback endpoints (use /progress/ prefix) ────────────────────────
+// ── Fixed feedback endpoints ────────────────────────────────────────────────
 const recordFeedback = async (userId, signalType, itemId, metadata = {}) => {
   if (!userId) return;
   try {
@@ -191,57 +192,109 @@ const JobCard = ({ job, index, userId, allJobs, onSignal }) => {
   );
 };
 
+// ── Empty state with actionable hints ──────────────────────────────────────
+const EmptyState = ({ onForceRefresh, loading, noSerpApi }) => (
+  <div className="rounded-2xl border border-white/8 p-10 text-center space-y-4"
+    style={{ background: "rgba(255,255,255,0.02)" }}>
+    <Ico d={I.brief} className="w-10 h-10 text-slate-600 mx-auto" />
+    <div>
+      <p className="text-sm text-slate-400 font-medium mb-1">No matches found</p>
+      <p className="text-xs text-slate-600">
+        Try lowering the Min Match % filter, broadening your search query, or refreshing jobs.
+      </p>
+    </div>
+
+    {noSerpApi && (
+      <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-left flex gap-3">
+        <Ico d={I.key} className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+        <p className="text-xs text-amber-300 leading-relaxed">
+          <span className="font-semibold">No SERPAPI_KEY detected.</span> Running on mock data — add{" "}
+          <code className="bg-white/10 px-1 rounded">SERPAPI_KEY=...</code> to your backend{" "}
+          <code className="bg-white/10 px-1 rounded">.env</code> for real job listings.
+        </p>
+      </div>
+    )}
+
+    <button
+      onClick={onForceRefresh}
+      disabled={loading}
+      className="mx-auto flex items-center gap-2 text-xs border border-violet-500/30 text-violet-400 px-4 py-2 rounded-xl hover:bg-violet-500/10 transition disabled:opacity-40">
+      <Ico d={I.refresh} className="w-3.5 h-3.5" />
+      Force refresh &amp; re-match
+    </button>
+  </div>
+);
+
 const JobMatches = ({
   jobQuery, jobLocation, resumeText, filters = {},
   setCareerAdvice, setSkillComparison,
   userId = "default_user",
 }) => {
-  const [jobs, setJobs]       = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError]     = useState(null);
-  const [stats, setStats]     = useState(null);
-  const [sigLog, setSigLog]   = useState([]);
+  const [jobs, setJobs]           = useState([]);
+  const [loading, setLoading]     = useState(false);
+  const [error, setError]         = useState(null);
+  const [stats, setStats]         = useState(null);
+  const [sigLog, setSigLog]       = useState([]);
+  const [noSerpApi, setNoSerpApi] = useState(false);
 
   const adviceRef = useRef(setCareerAdvice);
   const skillRef  = useRef(setSkillComparison);
   useEffect(() => { adviceRef.current = setCareerAdvice; }, [setCareerAdvice]);
   useEffect(() => { skillRef.current  = setSkillComparison; }, [setSkillComparison]);
 
-  const match = useCallback(async () => {
+  const match = useCallback(async (forceRefresh = false) => {
     if (!resumeText || !jobQuery) {
       setJobs([]); adviceRef.current?.(null); skillRef.current?.(null); return;
     }
-    setLoading(true); setError(null);
+    setLoading(true); setError(null); setNoSerpApi(false);
     try {
-      // ✅ FIXED: was /rag/match-realtime → correct route is /jobs/match
       const res = await fetch(`${API_BASE_URL}/jobs/match`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          resume_text: resumeText, job_query: jobQuery,
-          location: jobLocation || "India",
-          num_jobs: 50, top_k: 10, user_id: userId,
-          min_match_score: filters.minMatchScore || 40,
-          experience_level: filters.experienceLevel || null,
+          resume_text:        resumeText,
+          job_query:          jobQuery,
+          location:           jobLocation || "India",
+          num_jobs:           50,
+          top_k:              10,
+          user_id:            userId,
+          // FIX: default was 40 — lowered to 20 so borderline matches aren't silently dropped.
+          // Users can raise it with the filter UI if they want stricter results.
+          min_match_score:    filters.minMatchScore ?? 20,
+          experience_level:   filters.experienceLevel || null,
           posted_within_days: filters.postedWithinDays || 14,
-          exclude_remote: filters.excludeRemote || false,
+          exclude_remote:     filters.excludeRemote || false,
+          force_refresh:      forceRefresh,
         }),
       });
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || `HTTP ${res.status}`);
+      }
       const data = await res.json();
       const j = data.matched_jobs || [];
       setJobs(j);
       setStats({ total: data.total_jobs_fetched || 0, personalised: j.some(x => x.personalised) });
       if (data.career_advice)    adviceRef.current?.(data.career_advice);
       if (data.skill_comparison) skillRef.current?.(data.skill_comparison);
+
+      // Detect mock-data mode (all job IDs start with mock_)
+      if (j.length === 0 || (j.length > 0 && j[0].job_id?.startsWith("mock_"))) {
+        setNoSerpApi(true);
+      }
     } catch (e) {
       let msg = e.message;
-      if (msg.includes("SERPAPI") || msg.includes("API key"))
-        msg = "Job search API not configured. Please add SERPAPI_KEY to backend .env";
+      if (msg.includes("SERPAPI") || msg.includes("API key")) {
+        msg = "Job search API not configured. Add SERPAPI_KEY to backend .env";
+        setNoSerpApi(true);
+      }
+      if (msg.includes("Vector store unavailable")) {
+        msg = "Vector store failed to start. Check backend logs or call POST /jobs/admin/reset-vector-store";
+      }
       setError(msg); setJobs([]); adviceRef.current?.(null); skillRef.current?.(null);
     } finally { setLoading(false); }
   }, [resumeText, jobQuery, jobLocation, filters, userId]);
 
-  useEffect(() => { match(); }, [match]);
+  useEffect(() => { match(false); }, [match]);
 
   if (!resumeText || !jobQuery) {
     return (
@@ -269,6 +322,11 @@ const JobMatches = ({
               ✦ Personalised ranking
             </span>
           )}
+          {noSerpApi && !error && (
+            <span className="text-xs bg-amber-500/15 border border-amber-500/20 text-amber-400 px-2.5 py-1 rounded-full">
+              ⚠ Mock data
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           {jobs.length > 0 && (
@@ -276,7 +334,7 @@ const JobMatches = ({
               {jobs.length} match{jobs.length !== 1 ? "es" : ""}{stats?.total ? ` · ${stats.total} analysed` : ""}
             </span>
           )}
-          <button onClick={match} disabled={loading}
+          <button onClick={() => match(false)} disabled={loading}
             className="flex items-center gap-1.5 text-xs border border-white/10 text-slate-400 px-3 py-1.5 rounded-full hover:border-violet-500/30 hover:text-violet-300 transition disabled:opacity-40">
             <Ico d={I.refresh} className="w-3 h-3" /> Refresh
           </button>
@@ -289,7 +347,7 @@ const JobMatches = ({
           <Ico d={I.alert} className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
           <div className="flex-1">
             <p className="text-sm text-red-400">{error}</p>
-            <button onClick={match} className="mt-2 text-xs text-red-400 border border-red-500/30 px-3 py-1 rounded-lg hover:bg-red-500/10 transition">
+            <button onClick={() => match(false)} className="mt-2 text-xs text-red-400 border border-red-500/30 px-3 py-1 rounded-lg hover:bg-red-500/10 transition">
               Try Again
             </button>
           </div>
@@ -308,11 +366,7 @@ const JobMatches = ({
 
       {/* Empty */}
       {!loading && jobs.length === 0 && !error && (
-        <div className="rounded-2xl border border-white/8 p-10 text-center"
-          style={{ background: "rgba(255,255,255,0.02)" }}>
-          <Ico d={I.brief} className="w-10 h-10 text-slate-600 mx-auto mb-3" />
-          <p className="text-sm text-slate-500">No matches found — try adjusting filters or search terms</p>
-        </div>
+        <EmptyState onForceRefresh={() => match(true)} loading={loading} noSerpApi={noSerpApi} />
       )}
 
       {/* Cards */}
