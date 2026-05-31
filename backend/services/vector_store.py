@@ -285,9 +285,15 @@ class VectorStore :
     def get_stats ( self ) -> Dict :
         """Get vector store statistics including freshness"""
         # Use cached count; fall back to live count if cache unset
-        count = self._count_cache if self._count_cache >= 0 else self.collection.count()
-        if self._count_cache < 0 :
-            self._count_cache = count
+        count_cache = getattr( self, "_count_cache", -1 )
+
+        count = (
+            count_cache
+            if count_cache >= 0
+            else self.collection.count()
+        )
+
+        self._count_cache = count
 
         freshness = "unknown"
         avg_days_old = 0
