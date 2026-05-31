@@ -76,7 +76,12 @@ def _validate_upload(file: UploadFile) -> None:
     if not file.filename:
         raise HTTPException(status_code=400, detail="No filename provided")
     
-    ext = "." + file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+    if "." not in file.filename:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No file extension found. Allowed: {', '.join(ALLOWED_EXTENSIONS)}"
+        )
+    ext = "." + file.filename.rsplit(".", 1)[-1].lower()
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=400,
@@ -111,8 +116,12 @@ async def parse_resume(file: UploadFile = File(...)):
         from pathlib import Path
         
         temp_dir = tempfile.gettempdir()
+        # Use the already-validated file extension (guaranteed to have dot from _validate_upload)
+        ext = "." + file.filename.rsplit(".", 1)[-1].lower()
         temp_path = Path(temp_dir) / f"resume_{uuid.uuid4().hex[:8]}{ext}"
         temp_path.write_bytes(content)
+
+
         
         try:
             result = resume_parser.parse(str(temp_path))

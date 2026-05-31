@@ -118,18 +118,7 @@ app.add_middleware(RateLimitMiddleware)
 # ROUTE REGISTRATION
 # ─────────────────────────────────────────────────────────────────────────────
 
-app.include_router(resume_router, prefix="/api/v1")
-app.include_router(jobs_router, prefix="/api/v1")
-app.include_router(roadmap_router, prefix="/api/v1")
-app.include_router(interview_router, prefix="/api/v1")
-app.include_router(coach_router, prefix="/api/v1")
-app.include_router(progress_router, prefix="/api/v1")
-app.include_router(mentor_router, prefix="/api/v1")
-app.include_router(insights_router, prefix="/api/v1")
-app.include_router(admin_router, prefix="/api/v1")
-app.include_router(auth_router, prefix="/api/v1")
-
-# Legacy routes (without /api/v1 prefix for backward compatibility)
+# Primary routes at root level (routers define their own prefixes, e.g. /resume, /jobs)
 app.include_router(resume_router)
 app.include_router(jobs_router)
 app.include_router(roadmap_router)
@@ -140,6 +129,18 @@ app.include_router(mentor_router)
 app.include_router(insights_router)
 app.include_router(admin_router)
 app.include_router(auth_router)
+
+# Versioned routes at /api/v1 prefix for API versioning support
+app.include_router(resume_router, prefix="/api/v1")
+app.include_router(jobs_router, prefix="/api/v1")
+app.include_router(roadmap_router, prefix="/api/v1")
+app.include_router(interview_router, prefix="/api/v1")
+app.include_router(coach_router, prefix="/api/v1")
+app.include_router(progress_router, prefix="/api/v1")
+app.include_router(mentor_router, prefix="/api/v1")
+app.include_router(insights_router, prefix="/api/v1")
+app.include_router(admin_router, prefix="/api/v1")
+app.include_router(auth_router, prefix="/api/v1")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -184,11 +185,15 @@ async def health_check():
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
     """Global exception handler for unhandled errors."""
+    from fastapi.responses import JSONResponse
     logger.error(f"Unhandled exception: {exc}", exc_info=True)
-    return {
-        "error": "internal_error",
-        "message": "An unexpected error occurred. Please try again later.",
-    }, 500
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "internal_error",
+            "message": "An unexpected error occurred. Please try again later.",
+        },
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -66,13 +66,9 @@ async def market_insights(
 async def extract_skills(text: str, enhanced: bool = True):
     """Extract skills from text."""
     try:
-        if enhanced:
-            from backend.services.enhanced_skill_extractor import EnhancedSkillExtractor
-            extractor = EnhancedSkillExtractor()
-            skills = extractor.extract_skills_with_context(text)
-        else:
-            from backend.services.skill_tool import extract_skills_fast
-            skills = extract_skills_fast(text)
+        from backend.services.enhanced_skill_extractor import EnhancedSkillExtractor
+        extractor = EnhancedSkillExtractor()
+        skills = extractor.extract_skills_with_context(text)
         return {"skills": skills}
     except Exception as e:
         logger.error(f"Skill extraction error: {e}", exc_info=True)
@@ -80,11 +76,15 @@ async def extract_skills(text: str, enhanced: bool = True):
 
 
 @router.post("/skills/gap")
-async def skills_gap(resume_text: str, job_description: str):
+async def skills_gap_endpoint(resume_text: str, job_description: str):
     """Analyze skill gaps between resume and job description."""
     try:
-        from backend.services.skill_tool import skills_gap
-        return skills_gap(resume_text, job_description)
+        from backend.services.enhanced_skill_extractor import EnhancedSkillExtractor
+        extractor = EnhancedSkillExtractor()
+        resume_skills = extractor.extract_skills_with_context(resume_text)
+        job_skills = extractor.extract_skills_with_context(job_description)
+        comparison = extractor.compare_skills(resume_skills, job_skills)
+        return comparison
     except Exception as e:
         logger.error(f"Skills gap error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))

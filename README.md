@@ -186,7 +186,7 @@ cp .env.example .env
 ollama serve
 
 # 6. Start the backend
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
+uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 ---
@@ -289,24 +289,91 @@ Skill gaps + target role → `roadmap_generator.py` generates week-by-week learn
 
 ---
 
+---
+
 ## Scalability
 
-1. Stateless backend + scalable vector retrieval via ChromaDB.
-2. LLM provider waterfall (Ollama → Groq → Anthropic → Gemini) to absorb load spikes.
-3. Lightweight LTR re-ranking with measurable NDCG@5 evaluation.
-4. LangGraph can be extended with conditional edges without changing node contracts.
+**1. Stateless backend, horizontal scaling:** Every FastAPI endpoint is stateless — all state lives in ChromaDB, per-user JSON files, or the LTR store. Multiple backend instances can run behind a load balancer without session stickiness. Replacing per-user JSON with Redis gives atomic writes under concurrency.
+
+**2. Vector retrieval scales with job volume:** ChromaDB handles millions of vectors with sub-second retrieval. Batch upserts (32 docs/batch) prevent memory spikes during large job refresh cycles. The freshness boost is applied at query time, not stored, so index structure doesn't change. Employer-posted jobs index immediately alongside scraped listings.
+
+**3. LLM provider waterfall absorbs load spikes:** If Ollama is saturated (e.g. during concurrent interview sessions), requests automatically fall through to Groq → Anthropic → Gemini. LangChain's `LLMChain` uses the same waterfall — Ollama first, Groq as fallback. Adding GPU acceleration to Ollama (via CUDA or Metal) multiplies local inference throughput.
+
+**4. LTR model is lightweight:** The BPR SGD model is a 12-feature linear model in pure Python — training on 200 preference pairs takes under 100ms. Population and per-user weights are blended (60/40), so new users get reasonable rankings immediately.
+
+**5. LangGraph scales to conditional graphs:** The current 4-node linear graph can be extended with conditional edges (e.g. skip roadmap if skill gaps are empty) without changing the node implementations. The `CareerState` TypedDict is the only contract between nodes.
+
+**6. Bottlenecks identified:** The agent debate system makes 6–10 LLM calls per `full_analysis` run — this is the primary latency bottleneck. Mitigation: stream debate responses, cache synthesis results per resume hash, or run proposers in parallel threads. SerpAPI is rate-limited; caching job results by MD5 hash with a 5-minute TTL reduces redundant calls significantly.
+
+**7. Docker-ready:** The backend, ChromaDB, and Ollama can each run in a separate container. A `docker-compose.yml` with named volumes for ChromaDB persistence and `ollama pull` in the Ollama container startup brings the full stack up in one command.
 
 ---
 
 ## Feasibility
 
-Built and tested end-to-end on a standard laptop with Ollama. Minimal required external dependency is SerpAPI for live jobs.
+**Built and running today:** Every feature listed was built and tested during the hackathon. The system runs end-to-end on a standard laptop with Ollama providing local LLM and embedding inference — no mandatory cloud dependency.
+
+**Minimal infrastructure requirements:** The only hard external dependency is SerpAPI for live job listings (free tier: 100 searches/month). All AI inference runs locally via Ollama. ChromaDB persists to disk with no server required. If Ollama is unavailable, any one of Groq, Anthropic, or Gemini API keys is sufficient to keep the system running.
+
+**Production path is clear:** To take this to production, the changes needed are: (1) swap per-user JSON files for a Redis store with atomic writes, (2) add user authentication (JWT or session-based), (3) containerise with Docker Compose, (4) deploy FastAPI on Render or Railway and the React frontend on Vercel. The CORS configuration, environment variable system, and API surface are already structured for this.
+
+**Dependencies are stable and widely used:** FastAPI, ChromaDB, LangChain, LangGraph, pdfplumber, python-docx, and Sentence Transformers are all production-grade libraries with active maintenance. There are no experimental or proprietary dependencies that would block deployment.
 
 ---
 
 ## Novelty
 
-Most career tools are point solutions; Career Genie combines semantic retrieval, adaptive scoring, deep analysis via LangGraph, multi-agent debate, and confidence-gated output validation.
+Most career tools are point solutions: LinkedIn shows jobs, Grammarly edits text, LeetCode drills DSA. The few that combine features (like Jobscan or Resume Worded) do so with static keyword matching — they don't use your actual resume to semantically retrieve jobs, adapt to your feedback, or connect resume analysis to interview preparation to learning roadmaps.
+
+Career Genie is different in four specific ways:
+
+**1. Adaptive personalisation loop:** The combination of a feedback signal engine (EMA weight updates) and a pairwise BPR ranking model means the job matching improves with every interaction. This is not a feature claimed by any comparable free or open-source career tool.
+
+**2. LangChain + LangGraph integration:** The resume rewriter uses LangChain's `PromptTemplate + LLMChain` abstraction, and the deep analysis pipeline is a real `StateGraph` where each node's output becomes the next node's grounded input. These are not cosmetic — they enable swapping the underlying LLM without touching business logic, and the graph structure makes conditional branching easy to add.
+
+**3. Multi-agent debate for career advice:** Rather than a single LLM generating a career plan, three independent proposers generate plans that a critic attacks before a synthesiser produces a final output. This reduces hallucination and surfaces trade-offs the user would otherwise never see. The approach is borrowed from AI safety alignment research and applied here to career decision-making.
+
+**4. Confidence-gated output validation:** Every output from every module passes through a typed validator before being shown. The system knows when it doesn't know — low-confidence outputs are flagged or retried, not silently served. This is a specific gap in existing AI career tools which present all outputs with equal confidence regardless of quality.
+
+**5. Fully local by default:** The entire system can run with zero cloud API calls using Ollama. This matters for users and institutions in regions with data privacy concerns or unreliable internet — a specific gap for the Tamil Nadu institutional use case this project targets.
+
+---
+
+## Feature Depth
+
+**ATS Scorer edge cases handled:**
+- LLM response cleaning with 4 fallback parsing strategies (direct JSON → close unclosed braces → fix quote/key issues → regex partial extraction)
+- All 10 output fields have typed defaults — a partial LLM response still produces a complete, usable result
+- Resume text truncated at 4000 chars, JD at 3000 chars — large enough for real resumes, small enough to stay within context limits
+
+**LangChain Resume Rewriter:**
+- `PromptTemplate` with 3 input variables (`resume_text`, `target_role`, `tone`) bound to an `LLMChain`
+- LLM priority: Ollama → Groq → direct `llm_call_smart_sync` fallback — the chain degrades gracefully at every level
+- Generates before/after bullet comparisons and a quantified changes summary (action verbs added, metrics added, word count delta) in a second call
+
+**LangGraph Career Pipeline:**
+- `CareerState` TypedDict is the shared contract — every node gets the full accumulated state, not just its own inputs
+- Node 3 (roadmap) is explicitly grounded in Node 2's gap output; Node 4 (projects) is grounded in both Node 2 and Node 3
+- `_build_graph()` is called lazily at request time — no startup cost if LangGraph is not installed
+
+**HR Recruiter Simulation:**
+- Returns 10 structured fields: hire verdict (5 options), verdict summary, confidence %, 5 dimension scores (0–10), green flags, red flags, N recruiter questions (each with type and reason), salary bracket, interview rounds, internal notes
+- Hire verdict validated against allowed set; dimension scores clamped 0–10; questions normalised to `{question, type, reason}` even if LLM returns plain strings
+- Full fallback panel returned on any failure so the UI never goes blank
+
+**Learning-to-Rank model:**
+- 12-feature vector per job including affinity scores derived from user history
+- Population model (trained on all users) blends with per-user model (60/40) — new users get good rankings immediately, not after 50 interactions
+- NDCG@5 evaluated on held-out split after every retrain — model quality is measurable, not assumed
+
+**Job quality filtering:**
+- Quality score derived from: base 5.0 + adjustments for red-flag phrases, quality indicator phrases, description length bracket, company name heuristics, apply link presence
+- Scam detection via red-flag keyword list built from known patterns
+
+**Confidence system:**
+- 4 typed validators: ResumeParseValidator, SkillExtractionValidator, LLMOutputValidator, ConsistencyChecker
+- `confidence.py` provides score-based and entropy-based confidence estimation for multi-agent outputs
+- `consistency.py` checks response diversity and cross-validates ATS score vs advisor output vs job match scores — catches cases where one module produces an outlier
 
 ---
 
@@ -314,11 +381,19 @@ Most career tools are point solutions; Career Genie combines semantic retrieval,
 
 Career Genie uses AI-generated content for resume analysis, HR simulation, interview evaluation, and career advice. All outputs are informational only and do not constitute professional career, legal, or financial advice.
 
+**HR Recruiter Simulation:** The hire verdict, dimension scores, and recruiter notes are generated by a language model and are not the opinion of any real recruiter or employer. They should be used as a self-assessment tool, not as a prediction of actual hiring outcomes.
+
+**ATS Scoring:** Scores are approximations based on keyword and format heuristics. They do not reflect the behaviour of any specific company's ATS system.
+
+**Job Matching:** Job listings are retrieved from Google Jobs via SerpAPI. Career Genie does not verify the accuracy, legitimacy, or current availability of any listed position.
+
+**Data:** No user resume data is sent to any external service except the configured LLM provider fallbacks (Groq, Anthropic, Gemini) when Ollama is unavailable. When running fully on Ollama, all data stays local.
+
 ---
 
 ## License
 
-MIT License — see LICENSE file for details.
+MIT License — see [LICENSE](LICENSE) for details.
 
 ---
 
@@ -326,7 +401,7 @@ MIT License — see LICENSE file for details.
 
 Built for Origin 2026.
 
-**Team Name:** Neon Genesis
-**Contact:** somaskandan931@gmail.com
+**Team Name:** Neon Genesis  
+**Contact:** somaskandan931@gmail.com  
 **GitHub:** [Somaskandan931](https://github.com/Somaskandan931)
 

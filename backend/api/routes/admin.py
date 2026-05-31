@@ -26,22 +26,26 @@ async def get_config():
     """Return frontend configuration."""
     try:
         from backend.core.config import settings
-        
+
         def _check_ollama() -> bool:
             try:
                 from backend.services.ollama_service import get_ollama_service
                 return get_ollama_service().available
             except Exception:
                 return False
-        
+
+        # Frontend uses these flags to show banners like
+        # "Groq API key missing".
         return {
             "ollama_available": _check_ollama(),
+            "serpapi_key_present": bool(settings.effective_serpapi_key),
+            "groq_key_present": bool(settings.GROQ_API_KEY),
             "features": {
                 "debate": True,
                 "live_interview": True,
                 "mentor_matching": True,
                 "progress_tracking": True,
-            }
+            },
         }
     except Exception as e:
         logger.error(f"Config error: {e}", exc_info=True)

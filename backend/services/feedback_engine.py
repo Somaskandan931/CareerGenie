@@ -32,7 +32,12 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 # ── Storage ────────────────────────────────────────────────────────────────────
-_STORE_DIR = Path(os.getenv("FEEDBACK_STORE_DIR", "/tmp/career_genie_feedback"))
+try:
+    from core.config import settings as _settings
+    _DEFAULT_FEEDBACK_DIR = _settings.FEEDBACK_STORE_DIR
+except Exception:
+    _DEFAULT_FEEDBACK_DIR = "/tmp/career_genie_feedback"
+_STORE_DIR = Path(os.getenv("FEEDBACK_STORE_DIR", _DEFAULT_FEEDBACK_DIR))
 _STORE_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── Constants ──────────────────────────────────────────────────────────────────

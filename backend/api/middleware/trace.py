@@ -24,11 +24,9 @@ class TraceIDMiddleware(BaseHTTPMiddleware):
     HEADER_NAME = "X-Trace-ID"
     
     async def dispatch(self, request: Request, call_next) -> Response:
-        # Get trace ID from header or generate new one
-        trace_id = request.headers.get(self.HEADER_NAME) or set_trace_id()
-        
-        # Set trace ID in context for logging
-        set_trace_id(trace_id)
+        # Get trace ID from header or generate new one; set in context for logging
+        incoming = request.headers.get(self.HEADER_NAME, "").strip()
+        trace_id = set_trace_id(incoming or None)
         
         # Process request
         response = await call_next(request)

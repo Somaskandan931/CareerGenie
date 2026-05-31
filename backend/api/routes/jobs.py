@@ -104,6 +104,11 @@ async def match_jobs(request: JobMatchRequest):
     Returns matched jobs with scores, career advice, and skill comparison.
     """
     try:
+        if vector_store is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Vector store unavailable. Check server logs for initialization errors.",
+            )
         matcher = get_job_matcher()
         
         # Check if we need to refresh jobs
@@ -201,12 +206,16 @@ async def post_job(request: JobPostRequest):
 async def list_posted_jobs():
     """List all employer-posted jobs."""
     try:
-        jobs = vector_store.search("", top_k=200)
+        if vector_store is None:
+            return {"jobs": [], "total": 0}
+
+        jobs = vector_store.search("job position", top_k=200)
         posted = [j for j in jobs if j.get("source") == "employer_posted"]
         return {"jobs": posted, "total": len(posted)}
     except Exception as e:
         logger.error(f"List posted jobs error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 @router.get("/vector-store/status", response_model=VectorStoreStatus)

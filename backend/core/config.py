@@ -85,6 +85,16 @@ class Settings(BaseSettings):
         "claude-sonnet-4-5",
     ]
 
+    # ── Gemini models (tertiary fallback) ─────────────────────────────────────
+    GEMINI_API_KEY: Optional[str] = None
+    GEMINI_CHAT_MODEL: str = "gemini-2.0-flash"
+    GEMINI_SMART_MODEL: str = "gemini-2.0-flash"
+    GEMINI_FALLBACK_MODELS: List[str] = [
+        "gemini-2.0-flash",
+        "gemini-1.5-flash",
+        "gemini-1.5-flash-8b",
+    ]
+
     # ── Vector DB ─────────────────────────────────────────────────────────────
     CHROMA_PERSIST_DIR: str = str(Path(__file__).parent.parent / "chroma_db")
     EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"

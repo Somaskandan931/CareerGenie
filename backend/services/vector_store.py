@@ -237,8 +237,9 @@ class VectorStore :
 
         if count > 0 :
             try :
+                sample_emb = self._get_embeddings(["software"])
                 sample = self.collection.query(
-                    query_texts=["software"],
+                    query_embeddings=sample_emb,
                     n_results=min( 10, count )
                 )
                 if sample.get( 'metadatas' ) :
@@ -289,4 +290,19 @@ try:
     vector_store = VectorStore()
 except Exception as e:  # pragma: no cover
     logger.exception(f"VectorStore init failed; starting in degraded mode: {e}")
+
+    # Remove/refresh the existing chroma sqlite schema if it's stale.
+    # The most common error is: "no such column: collections.topic".
+    try:
+        if hasattr(settings, "CHROMA_PERSIST_DIR"):
+            persist_dir = Path(settings.CHROMA_PERSIST_DIR)
+            sqlite_path = persist_dir / "chroma.sqlite3"
+            if sqlite_path.exists():
+                logger.warning("Deleting stale Chroma sqlite schema at %s", sqlite_path)
+                sqlite_path.unlink()
+    except Exception as cleanup_exc:
+        logger.warning("Chroma schema cleanup failed: %s", cleanup_exc)
+
     vector_store = None
+
+

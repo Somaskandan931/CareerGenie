@@ -49,7 +49,12 @@ from typing import Any, Dict, List, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 # ── Storage ────────────────────────────────────────────────────────────────────
-_STORE_DIR = Path(os.getenv("LTR_STORE_DIR", "/tmp/career_genie_ltr"))
+try:
+    from core.config import settings as _settings
+    _DEFAULT_LTR_DIR = _settings.LTR_STORE_DIR
+except Exception:
+    _DEFAULT_LTR_DIR = "/tmp/career_genie_ltr"
+_STORE_DIR = Path(os.getenv("LTR_STORE_DIR", _DEFAULT_LTR_DIR))
 _STORE_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── Hyperparameters ────────────────────────────────────────────────────────────
@@ -396,7 +401,7 @@ class LearningToRankEngine:
             return job.get("_features", [0.0] * N_FEATURES)
 
         # Temporarily monkey-patch for training on raw features
-        import backend.services.learning_to_rank as _self_mod
+        import services.learning_to_rank as _self_mod
         _orig = _self_mod.extract_features
         _self_mod.extract_features = _pre_extracted
 
