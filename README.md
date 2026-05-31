@@ -448,17 +448,6 @@ Every module output passes through a typed validator before being returned. Four
 ### Adaptive Personalisation Loop
 Feedback signals (apply click, save, dismiss, offer received, and 5 others) update per-user EMA scoring weights. Every 20 new pairwise preference signals, the BPR SGD ranking model retrains. Population weights (all users) blend 60/40 with per-user weights — new users get good rankings immediately.
 
----
-
-## Screenshots
-
-| Dashboard | Resume Analysis | Job Matching |
-|---|---|---|
-| Add screenshot | Add screenshot | Add screenshot |
-
-| Mock Interview | Learning Roadmap | Progress Tracker |
-|---|---|---|
-| Add screenshot | Add screenshot | Add screenshot |
 
 ---
 
