@@ -10,14 +10,13 @@ from backend.core.config import settings
 # Initialize logger first
 logger = logging.getLogger( __name__ )
 
-# Try importing GoogleSearch with proper error handling
+# Try importing serpapi Client (v1.x API)
 try :
-    from serpapi import GoogleSearch
-
-    logger.info( "GoogleSearch imported successfully" )
+    from serpapi import Client as SerpApiClient
+    logger.info( "serpapi Client imported successfully" )
 except Exception as e :
-    logger.error( "GoogleSearch import failed: %s", e )
-    GoogleSearch = None
+    logger.error( "serpapi import failed: %s", e )
+    SerpApiClient = None
 
 # Simple cache to prevent duplicate requests
 _search_cache = {}
@@ -174,44 +173,31 @@ class JobScraper :
         logger.info( "Fetching fresh jobs: query='%s', location='%s', max_days=%d", query, location, days_old )
 
         if not self.api_key :
-            logger.error(
-                "No SERPAPI_KEY or SEARCHAPI_KEY found in environment"
-            )
-            jobs = self._get_mock_jobs(
-                query,
-                location,
-                num_jobs,
-                resume_skills,
-            )
+            logger.error( "No SERPAPI_KEY or SEARCHAPI_KEY found in environment" )
+            jobs = self._get_mock_jobs( query, location, num_jobs, resume_skills )
             _search_cache[cache_key] = (time.time(), jobs)
             return jobs
 
-        params = {
-            "engine" : "google_jobs",
-            "q" : f"{query} jobs",
-            "location" : location,
-            "gl" : "in",
-            "hl" : "en",
-            "num" : min( num_jobs, 100 ),
-            "api_key" : self.api_key,
-        }
-
         try :
-            if GoogleSearch is None :
-                raise ImportError( "serpapi package not installed. Run: pip install serpapi>=0.1.5" )
+            if SerpApiClient is None :
+                raise ImportError( "serpapi package not installed. Run: pip install serpapi" )
 
             logger.info(
                 "Using API key: %s...",
                 self.api_key[:8] if self.api_key else "NONE"
             )
 
-            logger.info(
-                "GoogleSearch class available: %s",
-                GoogleSearch is not None
-            )
+            # serpapi v1.x uses Client + client.search()
+            client = SerpApiClient( api_key=self.api_key )
+            results = client.search( {
+                "engine" : "google_jobs",
+                "q" : f"{query} jobs",
+                "location" : location,
+                "gl" : "in",
+                "hl" : "en",
+                "num" : min( num_jobs, 100 ),
+            } )
 
-            search = GoogleSearch( params )
-            results = search.get_dict()
             jobs_results = results.get( "jobs_results", [] )
             logger.info( "Found %d jobs from SerpAPI", len( jobs_results ) )
 
