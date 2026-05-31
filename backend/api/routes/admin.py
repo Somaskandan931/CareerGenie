@@ -36,10 +36,18 @@ async def get_config():
 
         # Frontend uses these flags to show banners like
         # "Groq API key missing".
+        import os
+        groq_key      = settings.GROQ_API_KEY      or os.environ.get("GROQ_API_KEY")
+        anthropic_key = settings.ANTHROPIC_API_KEY or os.environ.get("ANTHROPIC_API_KEY")
+        gemini_key    = settings.GEMINI_API_KEY    or os.environ.get("GEMINI_API_KEY")
+        ollama_ok     = _check_ollama()
         return {
-            "ollama_available": _check_ollama(),
+            "ollama_available": ollama_ok,
             "serpapi_key_present": bool(settings.effective_serpapi_key),
-            "groq_key_present": bool(settings.GROQ_API_KEY),
+            "groq_key_present": bool(groq_key),
+            "anthropic_key_present": bool(anthropic_key),
+            "gemini_key_present": bool(gemini_key),
+            "any_llm_available": ollama_ok or bool(groq_key) or bool(anthropic_key) or bool(gemini_key),
             "features": {
                 "debate": True,
                 "live_interview": True,

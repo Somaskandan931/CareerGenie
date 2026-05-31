@@ -417,7 +417,7 @@ export default function App() {
             style={{ background: "rgba(8,12,20,0.8)", backdropFilter: "blur(20px)" }}>
             <h1 className="text-sm font-bold text-white syne">{PAGE_TITLES[tab]}</h1>
             <div className="flex items-center gap-3">
-              {backendConfig && (!backendConfig.groq_key_present && !backendConfig.ollama_available) && (
+              {backendConfig && !backendConfig.any_llm_available && (
                 <span className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2.5 py-1 rounded-lg">
                   ⚠ No LLM available
                 </span>

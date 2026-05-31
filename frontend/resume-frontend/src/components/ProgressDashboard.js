@@ -1,7 +1,12 @@
 import React, { useState, useEffect, useCallback } from "react";
 import API_BASE_URL from '../config';
 
-const USER_ID = "default_user";
+const _getOrCreateUserId = () => {
+  let id = localStorage.getItem("cg-user-id");
+  if (!id) { id = "user_" + Math.random().toString(36).slice(2, 10); localStorage.setItem("cg-user-id", id); }
+  return id;
+};
+const USER_ID = _getOrCreateUserId();
 
 const Icon = ({ d, size = "h-4 w-4", className = "" }) => (
   <svg className={`${size} ${className}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">

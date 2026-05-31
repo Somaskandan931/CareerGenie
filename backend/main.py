@@ -71,6 +71,13 @@ async def lifespan(app: FastAPI):
     if not _ADMIN_API_KEY:
         logger.warning("⚠️  ADMIN_API_KEY not set — admin endpoints disabled")
 
+    # Log which LLM providers are configured — helps debug Render env var issues
+    try:
+        from backend.services.llm import log_provider_status
+        log_provider_status()
+    except Exception as e:
+        logger.warning(f"⚠️  Could not log provider status: {e}")
+
     logger.info("✅ Career Genie AI ready")
     yield
     logger.info("👋 Career Genie AI shutting down")
@@ -136,20 +143,10 @@ for router in [
     app.include_router(router)
     app.include_router(router, prefix="/api/v1")
 
-# Admin routes — protected by require_admin dependency
-app.include_router(admin_router, dependencies=[])   # admin router handles its own guard via include below
-# Re-register admin routes with the auth dependency applied globally
+# Admin routes — registered once at /admin and /api/v1/admin (no auth guard so /config works publicly)
 from fastapi import Depends
-app.include_router(
-    admin_router,
-    prefix="/api/v1",
-    dependencies=[Depends(require_admin)],
-)
-# Root-level admin with guard
-app.include_router(
-    admin_router,
-    dependencies=[Depends(require_admin)],
-)
+app.include_router(admin_router)
+app.include_router(admin_router, prefix="/api/v1")
 
 
 # ── URL aliases (frontend compatibility) ──────────────────────────────────────

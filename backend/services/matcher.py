@@ -244,9 +244,15 @@ class JobMatcher:
             return ai_pipeline.call(system, user, temp=0.7, max_tokens=150)
         except Exception as exc:
             logger.error("Explanation error: %s", exc)
+            # Human-readable fallback when LLM is unavailable
+            matched_str = ", ".join(matched_skills[:3]) if matched_skills else "general skills"
+            gap_str = f" Key gap to close: {missing_skills[0]}." if missing_skills else ""
+            count = len(matched_skills)
+            strength = "strong" if count >= 4 else "good" if count >= 2 else "partial"
             return (
-                f"Good match on {len(matched_skills)} skills. "
-                + (f"Focus on {missing_skills[0]}." if missing_skills else "Ready to apply!")
+                f"{strength.capitalize()} match — {count} skill{'s' if count != 1 else ''} align "
+                f"including {matched_str}.{gap_str} "
+                + ("Ready to apply!" if not missing_skills else "Address the gap before applying.")
             )
 
 

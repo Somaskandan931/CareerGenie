@@ -11,16 +11,6 @@ Sync  : llm_call_sync(system, user, *, temp, max_tokens) -> str
         llm_call_smart_sync(...)   higher token budget
         llm_json(...)              returns parsed dict/list
 Async : llm_call(...)  /  llm_call_smart(...)
-
-Speed optimisations vs original
----------------------------------
-• Ollama chat timeout reduced to 45 s (was 60 s buried in OllamaService)
-• llm_call_smart_sync default max_tokens reduced 2048→1536 for 3 B models
-• _call_ollama propagates RuntimeError immediately so the waterfall
-  moves to Groq fast instead of waiting on a dead connection
-• Async path uses asyncio.to_thread (Python 3.9+) instead of
-  loop.run_in_executor(None, ...) — cleaner and slightly lower overhead
-• Groq/Anthropic/Gemini clients still initialised lazily (no change)
 """
 
 from __future__ import annotations
@@ -28,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import time
 from typing import Any
@@ -68,21 +59,15 @@ def _get_groq():
     if _groq_client is not None:
         return _groq_client
     from backend.core.config import settings
-    if not settings.GROQ_API_KEY:
+
+    # Support both settings object and raw env var (Render sets env vars directly)
+    api_key = settings.GROQ_API_KEY or os.environ.get("GROQ_API_KEY")
+    if not api_key:
+        logger.warning("[llm] ⚠️ GROQ_API_KEY not set — skipping Groq")
         return None
     try:
         from groq import Groq
-        import httpx
-        http_client = httpx.Client(
-            timeout=httpx.Timeout(60.0, connect=10.0),
-            follow_redirects=True,
-            proxies=None,
-        )
-        _groq_client = Groq(
-            api_key=settings.GROQ_API_KEY,
-            http_client=http_client,
-            max_retries=0,
-        )
+        _groq_client = Groq(api_key=api_key, max_retries=0)
         logger.info("[llm] ✅ Groq client initialised (cloud fallback)")
         return _groq_client
     except ImportError:
@@ -98,20 +83,14 @@ def _get_anthropic():
     if _anthropic_client is not None:
         return _anthropic_client
     from backend.core.config import settings
-    if not settings.ANTHROPIC_API_KEY:
+
+    api_key = settings.ANTHROPIC_API_KEY or os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        logger.warning("[llm] ⚠️ ANTHROPIC_API_KEY not set — skipping Anthropic")
         return None
     try:
-        import anthropic, httpx
-        http_client = httpx.Client(
-            timeout=httpx.Timeout(60.0, connect=10.0),
-            follow_redirects=True,
-            proxies=None,
-        )
-        _anthropic_client = anthropic.Anthropic(
-            api_key=settings.ANTHROPIC_API_KEY,
-            http_client=http_client,
-            max_retries=0,
-        )
+        import anthropic
+        _anthropic_client = anthropic.Anthropic(api_key=api_key, max_retries=0)
         logger.info("[llm] ✅ Anthropic client initialised (cloud fallback)")
         return _anthropic_client
     except ImportError:
@@ -127,15 +106,14 @@ def _get_gemini():
     if _gemini_client is not None:
         return _gemini_client, _genai_module
     from backend.core.config import settings
-    if not settings.GEMINI_API_KEY:
+
+    api_key = settings.GEMINI_API_KEY or os.environ.get("GEMINI_API_KEY")
+    if not api_key:
         return None, None
     try:
         from google import genai as _g
         _genai_module = _g
-        _gemini_client = _g.Client(
-            api_key=settings.GEMINI_API_KEY,
-            http_options={"api_version": "v1"},
-        )
+        _gemini_client = _g.Client(api_key=api_key, http_options={"api_version": "v1"})
         logger.info("[llm] ✅ Gemini client initialised (tertiary fallback)")
         return _gemini_client, _genai_module
     except ImportError:
@@ -182,6 +160,35 @@ def _is_quota_exhausted(exc: Exception) -> bool:
 
 
 # =============================================================================
+# Startup diagnostics — call once at boot to surface config issues early
+# =============================================================================
+
+def log_provider_status() -> None:
+    """Log which LLM providers are configured at startup."""
+    from backend.core.config import settings
+
+    groq_key     = settings.GROQ_API_KEY      or os.environ.get("GROQ_API_KEY")
+    anthropic_key = settings.ANTHROPIC_API_KEY or os.environ.get("ANTHROPIC_API_KEY")
+    gemini_key   = settings.GEMINI_API_KEY    or os.environ.get("GEMINI_API_KEY")
+
+    def _mask(k): return f"{k[:8]}…" if k else "NOT SET"
+
+    logger.info("[llm] Provider config at startup:")
+    logger.info("[llm]   Groq API key      : %s", _mask(groq_key))
+    logger.info("[llm]   Anthropic API key : %s", _mask(anthropic_key))
+    logger.info("[llm]   Gemini API key    : %s", _mask(gemini_key))
+
+    if not any([groq_key, anthropic_key, gemini_key]):
+        logger.error(
+            "[llm] ❌ No cloud LLM API keys found! "
+            "Set GROQ_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY in Render env vars."
+        )
+    else:
+        configured = [n for n, k in [("Groq", groq_key), ("Anthropic", anthropic_key), ("Gemini", gemini_key)] if k]
+        logger.info("[llm] ✅ Cloud providers configured: %s", ", ".join(configured))
+
+
+# =============================================================================
 # Individual provider callers
 # =============================================================================
 
@@ -189,29 +196,19 @@ _MAX_RETRIES = 2
 
 
 def _call_ollama(system: str, user: str, *, temp: float, max_tokens: int) -> str:
-    """
-    Call Ollama local LLM.
-    Cap max_tokens at 1024 for the 3 B model — larger budgets slow it
-    considerably and rarely improve quality for structured outputs.
-    """
     svc = _get_ollama()
     if not svc or not svc.available:
         raise RuntimeError("Ollama service not available. Run 'ollama serve'")
 
-    # Protect against callers requesting huge outputs from a tiny local model
     effective_tokens = min(max_tokens, 1024)
-
     messages = [
         {"role": "system", "content": system},
         {"role": "user",   "content": user},
     ]
-
     result = svc.chat(messages, temperature=temp, max_tokens=effective_tokens)
-
     if result and len(result) > 5:
         logger.info(f"[llm] ✅ Ollama/{svc.llm_model} → {len(result)} chars")
         return result
-
     raise RuntimeError("Empty or too-short response from Ollama")
 
 
@@ -348,6 +345,11 @@ def _call_sync(
 ) -> str:
     from backend.core.config import settings
 
+    # Read keys from both settings and raw env (Render sets env vars directly)
+    groq_key      = settings.GROQ_API_KEY      or os.environ.get("GROQ_API_KEY")
+    anthropic_key = settings.ANTHROPIC_API_KEY or os.environ.get("ANTHROPIC_API_KEY")
+    gemini_key    = settings.GEMINI_API_KEY    or os.environ.get("GEMINI_API_KEY")
+
     # 1. Ollama (local, no rate limits, no internet needed)
     try:
         return _call_ollama(system, user, temp=temp, max_tokens=max_tokens)
@@ -355,7 +357,7 @@ def _call_sync(
         logger.warning(f"[llm] Ollama failed: {e} → trying Groq")
 
     # 2. Groq
-    if settings.GROQ_API_KEY:
+    if groq_key:
         try:
             return _call_groq(system, user, temp=temp, max_tokens=max_tokens)
         except RuntimeError as e:
@@ -364,7 +366,7 @@ def _call_sync(
             logger.warning(f"[llm] Groq error: {e} → trying Anthropic")
 
     # 3. Anthropic
-    if settings.ANTHROPIC_API_KEY:
+    if anthropic_key:
         try:
             return _call_anthropic(system, user, temp=temp, max_tokens=max_tokens)
         except RuntimeError as e:
@@ -373,7 +375,7 @@ def _call_sync(
             logger.warning(f"[llm] Anthropic error: {e} → trying Gemini")
 
     # 4. Gemini
-    if settings.GEMINI_API_KEY:
+    if gemini_key:
         try:
             return _call_gemini(system, user, temp=temp, max_tokens=max_tokens)
         except Exception as e:
@@ -383,9 +385,9 @@ def _call_sync(
         "No LLM providers available.\n"
         "Make sure Ollama is running (recommended) or set at least one API key:\n"
         "  - Ollama: run 'ollama serve' and 'ollama pull llama3.2:3b'\n"
-        "  - Groq: set GROQ_API_KEY in backend/.env\n"
-        "  - Anthropic: set ANTHROPIC_API_KEY in backend/.env\n"
-        "  - Gemini: set GEMINI_API_KEY in backend/.env"
+        "  - Groq: set GROQ_API_KEY in Render environment variables\n"
+        "  - Anthropic: set ANTHROPIC_API_KEY in Render environment variables\n"
+        "  - Gemini: set GEMINI_API_KEY in Render environment variables"
     )
 
 
@@ -409,9 +411,6 @@ def llm_call_smart_sync(
     user: str,
     *,
     temp: float = 0.5,
-    # Reduced from 2048 → 1536: llama3.2:3b doesn't benefit from huge
-    # budgets and the extra tokens cost significant extra latency.
-    # Cloud providers will honour the full value if Ollama falls through.
     max_tokens: int = 1536,
 ) -> str:
     """Higher-token sync call for roadmaps, career advice, debate synthesis."""

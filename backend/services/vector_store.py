@@ -46,6 +46,8 @@ class VectorStore :
         self._dimension = 384  # TF-IDF max features dimension
         self._embedder_initialized = False
         self._use_tfidf = True  # Use TF-IDF on Render (memory efficient)
+        self._tfidf_fitted = False  # Track whether TF-IDF has been fit
+        self._tfidf_corpus: List[str] = []  # Corpus used to fit the vectorizer
 
         logger.info( f"Vector store initialized. Current jobs: {self.collection.count()}" )
 
@@ -117,9 +119,22 @@ class VectorStore :
 
             # Check if using TF-IDF
             if hasattr( self.embedder, 'transform' ) :
-                # TF-IDF vectorizer
-                result = self.embedder.transform( [text] ).toarray()[0]
-                return result.tolist()
+                # TF-IDF vectorizer — must be fitted before transform
+                if not self._tfidf_fitted:
+                    result = self.embedder.fit_transform( [text] ).toarray()[0]
+                    self._tfidf_fitted = True
+                    self._tfidf_corpus = [text]
+                    return result.tolist()
+                else:
+                    try:
+                        result = self.embedder.transform( [text] ).toarray()[0]
+                        return result.tolist()
+                    except Exception:
+                        combined = self._tfidf_corpus + [text]
+                        self.embedder.fit( combined )
+                        self._tfidf_fitted = True
+                        result = self.embedder.transform( [text] ).toarray()[0]
+                        return result.tolist()
 
             # SentenceTransformer
             result = self.embedder.encode( [text] )[0]
@@ -144,9 +159,24 @@ class VectorStore :
 
             # Check if using TF-IDF
             if hasattr( self.embedder, 'transform' ) :
-                # TF-IDF vectorizer
-                result = self.embedder.transform( texts ).toarray()
-                return result.tolist()
+                # TF-IDF vectorizer — must be fitted before transform
+                if not self._tfidf_fitted or not texts:
+                    # Fit on provided texts (happens during index_jobs)
+                    result = self.embedder.fit_transform( texts ).toarray()
+                    self._tfidf_fitted = True
+                    self._tfidf_corpus = list(texts)
+                    return result.tolist()
+                else:
+                    try:
+                        result = self.embedder.transform( texts ).toarray()
+                        return result.tolist()
+                    except Exception:
+                        # Refit if corpus changed or vectorizer was reset
+                        combined = self._tfidf_corpus + list(texts)
+                        self.embedder.fit( combined )
+                        self._tfidf_fitted = True
+                        result = self.embedder.transform( texts ).toarray()
+                        return result.tolist()
 
             # SentenceTransformer
             result = self.embedder.encode( texts )

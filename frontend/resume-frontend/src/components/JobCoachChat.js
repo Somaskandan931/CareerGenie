@@ -94,7 +94,13 @@ export default function JobCoachChat({ resumeText = "", userId }) {
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || `HTTP ${res.status}`);
       const data = await res.json();
       setMessages(prev => [...prev, { role: "assistant", content: data.reply ?? data.response ?? data.content ?? "" }]);
-    } catch (e) { setError(e.message); }
+    } catch (e) {
+      let msg = e.message || "Something went wrong.";
+      if (msg.includes("No LLM providers") || msg.includes("LLM") || msg.includes("500")) {
+        msg = "AI service temporarily unavailable. Please check that your API keys (GROQ_API_KEY or ANTHROPIC_API_KEY) are set in Render environment variables, then redeploy.";
+      }
+      setError(msg);
+    }
     finally { setLoading(false); inputRef.current?.focus(); }
   };
 
