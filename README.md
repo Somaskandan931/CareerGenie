@@ -21,8 +21,7 @@ Semantic job matching · ATS scoring · LangChain resume rewriting · LangGraph 
 [![ChromaDB](https://img.shields.io/badge/ChromaDB-vector--db-FF6719?style=flat-square)](https://trychroma.com)
 [![Ollama](https://img.shields.io/badge/Ollama-local--LLM-black?style=flat-square)](https://ollama.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
-[![Built for Origin 2026](https://img.shields.io/badge/Built%20for-Origin%202026-6C63FF?style=flat-square)](https://github.com/Somaskandan931)
-
+[![Netlify Status](https://api.netlify.com/api/v1/badges/58c92902-cc94-4236-824d-5b3fd3f55bf2/deploy-status)](https://app.netlify.com/projects/careergenie-ai/deploys)
 </div>
 
 ---
