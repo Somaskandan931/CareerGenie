@@ -1,4 +1,3 @@
-
 <div align="center">
 
 ```
@@ -131,6 +130,8 @@ Adaptive Feedback Loop + Progress Tracking
 ---
 
 ## System Architecture
+
+![Career Genie System Architecture](System%20architecture%20for%20career%20application.png)
 
 Career Genie follows a modular AI-service architecture built around retrieval, orchestration, and adaptive feedback systems.
 
